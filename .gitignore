@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Claude Code local settings (personal permission grants — not for public repo)
+.claude/
+
+# User plan data (private — each user keeps their own plans locally)
+plans/*.json

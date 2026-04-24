@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Visual Network Planning{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header>
+    <a class="brand" href="{{ url_for('main.index') }}">Visual Network Planning</a>
+    <span class="subtitle">IPv4 range planning</span>
+  </header>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <ul class="flashes">
+        {% for category, msg in messages %}
+          <li class="flash flash-{{ category }}">{{ msg }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  {% endwith %}
+  <main>{% block content %}{% endblock %}</main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
