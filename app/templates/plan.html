@@ -73,6 +73,20 @@
   </section>
 
   <aside class="pane pane-right">
+    <h2>Import Infoblox CSV</h2>
+    <form method="post" enctype="multipart/form-data"
+          action="{{ url_for('main.import_infoblox', name=plan.name) }}">
+      <label>CSV file
+        <input type="file" name="file" accept=".csv,text/csv" required>
+      </label>
+      <button type="submit">Import</button>
+      <p class="muted small">
+        <code>networkcontainer</code> rows become supernets;
+        <code>network</code> rows become allocations.
+        Duplicates are skipped; overlaps are reported.
+      </p>
+    </form>
+
     <h2>Add supernet</h2>
     <form method="post" action="{{ url_for('main.add_supernet', name=plan.name) }}">
       <label>CIDR<input name="cidr" required placeholder="10.0.0.0/16"></label>

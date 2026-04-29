@@ -7,7 +7,7 @@ from flask import (
     render_template, request, url_for,
 )
 
-from . import planning, storage
+from . import infoblox, planning, storage
 from .models import Allocation
 
 bp = Blueprint("main", __name__)
@@ -168,6 +168,67 @@ def carve(name: str):
         plan.allocations.append(Allocation(cidr=cidr, name=alloc_name, description=description))
     storage.save_plan(_plans_dir(), plan)
     flash(f"Committed: {', '.join(suggestions)}", "ok")
+    return redirect(url_for("main.view_plan", name=name))
+
+
+@bp.post("/plans/<name>/import_infoblox")
+def import_infoblox(name: str):
+    plan = _load_or_404(name)
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("No file uploaded.", "error")
+        return redirect(url_for("main.view_plan", name=name))
+    try:
+        text = file.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        flash(f"Could not read upload: {e}", "error")
+        return redirect(url_for("main.view_plan", name=name))
+
+    result = infoblox.parse_infoblox_csv(text)
+
+    added_super = added_alloc = skipped_dup = 0
+    rejected: list[str] = []
+
+    for s in result["supernets"]:
+        ok, reason = planning.validate_new_allocation(plan, s.cidr)
+        if not ok:
+            if "duplicate" in reason.lower():
+                skipped_dup += 1
+            else:
+                rejected.append(f"{s.cidr}: {reason}")
+            continue
+        plan.supernets.append(s)
+        added_super += 1
+
+    for a in result["allocations"]:
+        ok, reason = planning.validate_new_allocation(plan, a.cidr)
+        if not ok:
+            if "duplicate" in reason.lower():
+                skipped_dup += 1
+            else:
+                rejected.append(f"{a.cidr}: {reason}")
+            continue
+        plan.allocations.append(a)
+        added_alloc += 1
+
+    if added_super or added_alloc:
+        storage.save_plan(_plans_dir(), plan)
+
+    summary = f"Imported {added_super} supernets, {added_alloc} allocations"
+    extras = []
+    if skipped_dup:
+        extras.append(f"skipped {skipped_dup} duplicates")
+    if rejected:
+        extras.append(f"{len(rejected)} rejected (overlap)")
+    if result["errors"]:
+        extras.append(f"{len(result['errors'])} parse errors")
+    if extras:
+        summary += " (" + "; ".join(extras) + ")"
+    flash(summary + ".", "ok" if (added_super or added_alloc) else "info")
+    for e in result["errors"][:10]:
+        flash(e, "error")
+    for r in rejected[:10]:
+        flash(r, "error")
     return redirect(url_for("main.view_plan", name=name))
 
 

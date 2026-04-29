@@ -13,3 +13,6 @@ __pycache__/
 
 # User plan data (private — each user keeps their own plans locally)
 plans/*.json
+
+# Source data (Infoblox exports etc. typically contain real environment info)
+*.csv

@@ -29,9 +29,10 @@ can be running in under a minute.
 
 ```
 app/planning.py    pure logic over ipaddress; no Flask, no I/O, no globals
+app/infoblox.py    pure CSV parser for Infoblox exports; no Flask, no I/O
 app/storage.py     JSON load/save; no Flask
 app/models.py      dataclasses; no Flask
-app/routes.py      HTTP surface; calls planning + storage
+app/routes.py      HTTP surface; calls planning + infoblox + storage
 app/templates/     server-rendered HTML (Jinja)
 app/static/        CSS + D3 viz.js (no build step, load D3 from CDN)
 ```
@@ -63,6 +64,28 @@ makes the unit tests fast and honest — keep it that way.
   valid when the parent is entirely free)
 
 Passing more than one or none raises `ValueError`. Tests enforce this.
+
+## Infoblox CSV import
+
+`app/infoblox.py` parses real Infoblox network/networkcontainer CSV exports.
+Conventions:
+
+- `header-<type>` rows carry the schema; multiple may appear and the most
+  recent wins for that type. Required columns end in `*` (stripped on read).
+- `network` rows become allocations; `networkcontainer` rows become
+  supernets. Other Infoblox object types are silently ignored.
+- `netmask*` accepts both dotted-quad (`255.255.255.0`) and integer
+  prefixes (`24`); `ipaddress.IPv4Network` handles both.
+- Name comes from `EA-Network Name`, falling back to `comment`. Tags come
+  from `EA-TAGS` split on commas. Description is the `comment` field.
+- Errors (bad address, missing fields, data row before header) are
+  collected per-row and returned in `result["errors"]` — the parser never
+  raises on bad input; it carries on and reports.
+
+Real exports may contain identifying organizational data (ticket numbers,
+person names, AWS account IDs). **Never commit a real export.** Tests use
+RFC 5737 documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
+`203.0.113.0/24`) and inline string fixtures.
 
 ## Persistence
 

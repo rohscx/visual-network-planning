@@ -34,6 +34,10 @@ Opens `http://127.0.0.1:5000` in your browser.
 - **Visualization** — nested-rectangle view of each supernet, colored by
   usage; free blocks labeled with their CIDR so you can see at a glance
   where to carve next.
+- **Infoblox CSV import** — drop in a `network` / `networkcontainer`
+  export from Infoblox and the tool seeds the plan: `networkcontainer`
+  rows become supernets, `network` rows become allocations, names/tags
+  come from the `EA-Network Name` and `EA-TAGS` extensible attributes.
 
 ## Layout
 
@@ -80,6 +84,7 @@ pytest
 - Conflict + orphan detection
 - Nested hierarchy tree + D3 rectangle visualization
 - JSON-file persistence per plan
+- Infoblox CSV import (`network` + `networkcontainer` rows)
 
 **Not in v1** (intentionally — contributions welcome):
 
