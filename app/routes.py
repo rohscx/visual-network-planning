@@ -13,6 +13,10 @@ from .models import Allocation
 bp = Blueprint("main", __name__)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _plans_dir() -> Path:
     return current_app.config["PLANS_DIR"]
 
@@ -26,9 +30,74 @@ def _load_or_404(name: str):
         abort(400, description=str(e))
 
 
+def _params() -> dict:
+    """Read params from JSON body or form, whichever the client sent."""
+    if request.is_json:
+        return request.get_json(silent=True) or {}
+    return {k: v for k, v in request.form.items()}
+
+
+def _split_tags(value) -> list[str]:
+    """Accept either a comma-separated string or a list."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(t).strip() for t in value if str(t).strip()]
+    return [t.strip() for t in str(value).split(",") if t.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Plans index
+# ---------------------------------------------------------------------------
+
+def _plan_metadata(name: str) -> dict:
+    """Compact stats for the index table."""
+    try:
+        plan = storage.load_plan(_plans_dir(), name)
+    except (FileNotFoundError, ValueError):
+        return {"name": name, "error": True}
+
+    tree = planning.build_tree(plan)
+    conflicts = planning.find_conflicts(plan)
+    orphans = planning.find_orphans(plan)
+
+    total_addresses = 0
+    used_addresses = 0
+    for root in tree["roots"]:
+        total_addresses += root["total_addresses"]
+        used_addresses += root["used_addresses"]
+    pct = round(100 * used_addresses / total_addresses, 1) if total_addresses else 0.0
+
+    if plan.supernets:
+        scope = ", ".join(s.cidr for s in plan.supernets[:2])
+        if len(plan.supernets) > 2:
+            scope += f" +{len(plan.supernets) - 2}"
+    else:
+        scope = "—"
+
+    if conflicts:
+        status = ("err", f"{len(conflicts)} conflict{'s' if len(conflicts) != 1 else ''}")
+    elif orphans:
+        status = ("warn", f"{len(orphans)} orphan{'s' if len(orphans) != 1 else ''}")
+    else:
+        status = ("ok", "healthy")
+
+    return {
+        "name": name,
+        "scope": scope,
+        "supernets": len(plan.supernets),
+        "allocations": len(plan.allocations),
+        "utilization_pct": pct,
+        "modified": storage.plan_modified(_plans_dir(), name),
+        "status_kind": status[0],
+        "status_label": status[1],
+    }
+
+
 @bp.get("/")
 def index():
-    plans = storage.list_plans(_plans_dir())
+    names = storage.list_plans(_plans_dir())
+    plans = [_plan_metadata(n) for n in names]
     return render_template("index.html", plans=plans)
 
 
@@ -51,143 +120,202 @@ def delete_plan(name: str):
     return redirect(url_for("main.index"))
 
 
+# ---------------------------------------------------------------------------
+# Plan view (SPA shell)
+# ---------------------------------------------------------------------------
+
 @bp.get("/plans/<name>")
 def view_plan(name: str):
+    # Existence check; the JS fetches data via /plan.json.
+    _load_or_404(name)
+    return render_template("plan.html", plan_name=name)
+
+
+@bp.get("/plans/<name>/plan.json")
+def plan_json(name: str):
+    """Single source of truth for the plan view: raw plan + computed tree +
+    conflicts + orphans."""
     plan = _load_or_404(name)
     tree = planning.build_tree(plan)
     conflicts = planning.find_conflicts(plan)
-    return render_template(
-        "plan.html",
-        plan=plan,
-        tree=tree,
-        conflicts=conflicts,
-    )
+    orphans = planning.find_orphans(plan)
+    return jsonify({
+        "name": plan.name,
+        "supernets": [s.to_dict() for s in plan.supernets],
+        "allocations": [a.to_dict() for a in plan.allocations],
+        "tree": tree,
+        "conflicts": [list(p) for p in conflicts],
+        "orphans": orphans,
+    })
 
 
 @bp.get("/plans/<name>/tree.json")
 def tree_json(name: str):
+    """Kept for backward compatibility / external integrations."""
     plan = _load_or_404(name)
-    tree = planning.build_tree(plan)
-    return jsonify(tree)
+    return jsonify(planning.build_tree(plan))
 
 
-@bp.post("/plans/<name>/supernet")
-def add_supernet(name: str):
-    plan = _load_or_404(name)
-    cidr = (request.form.get("cidr") or "").strip()
-    label = (request.form.get("name") or "").strip()
-    description = (request.form.get("description") or "").strip()
+# ---------------------------------------------------------------------------
+# Mutating routes (JSON-friendly; some still take form data)
+# ---------------------------------------------------------------------------
+
+def _add_one(plan, *, kind: str, cidr: str, name: str, description: str, tags: list[str]):
+    """Validate + append to plan in-memory. Returns (ok, reason)."""
     try:
         planning.parse_strict(cidr)
     except ValueError as e:
-        flash(f"Invalid CIDR: {e}", "error")
-        return redirect(url_for("main.view_plan", name=name))
+        return False, f"Invalid CIDR: {e}"
     ok, reason = planning.validate_new_allocation(plan, cidr)
     if not ok:
-        flash(reason, "error")
-        return redirect(url_for("main.view_plan", name=name))
-    plan.supernets.append(Allocation(cidr=str(planning.parse(cidr)), name=label, description=description))
+        return False, reason
+    canonical = str(planning.parse(cidr))
+    alloc = Allocation(cidr=canonical, name=name, description=description, tags=tags)
+    if kind == "supernet":
+        plan.supernets.append(alloc)
+    else:
+        plan.allocations.append(alloc)
+    return True, ""
+
+
+@bp.post("/plans/<name>/add")
+def add_record(name: str):
+    """Unified add endpoint. Body: kind=supernet|allocation, cidr, name,
+    description, tags (comma-separated string OR list)."""
+    p = _params()
+    kind = (p.get("kind") or "supernet").strip()
+    if kind not in ("supernet", "allocation"):
+        return jsonify(ok=False, error=f"unknown kind: {kind}"), 400
+    return _add_kind(name, kind)
+
+
+def _add_kind(name: str, kind: str):
+    plan = _load_or_404(name)
+    p = _params()
+    cidr = (p.get("cidr") or "").strip()
+    label = (p.get("name") or "").strip()
+    description = (p.get("description") or "").strip()
+    tags = _split_tags(p.get("tags"))
+    ok, reason = _add_one(plan, kind=kind, cidr=cidr, name=label,
+                          description=description, tags=tags)
+    if not ok:
+        return jsonify(ok=False, error=reason), 400
     storage.save_plan(_plans_dir(), plan)
-    flash(f"Added supernet {cidr}", "ok")
-    return redirect(url_for("main.view_plan", name=name))
+    return jsonify(ok=True)
+
+
+# Backward-compatible aliases used by older clients / direct curl tests.
+@bp.post("/plans/<name>/supernet")
+def add_supernet(name: str):
+    return _add_kind(name, "supernet")
 
 
 @bp.post("/plans/<name>/allocate")
 def add_allocation(name: str):
+    return _add_kind(name, "allocation")
+
+
+@bp.post("/plans/<name>/edit")
+def edit_record(name: str):
+    """Update name/description/tags on an existing supernet or allocation."""
     plan = _load_or_404(name)
-    cidr = (request.form.get("cidr") or "").strip()
-    label = (request.form.get("name") or "").strip()
-    description = (request.form.get("description") or "").strip()
-    try:
-        planning.parse_strict(cidr)
-    except ValueError as e:
-        flash(f"Invalid CIDR: {e}", "error")
-        return redirect(url_for("main.view_plan", name=name))
-    ok, reason = planning.validate_new_allocation(plan, cidr)
-    if not ok:
-        flash(reason, "error")
-        return redirect(url_for("main.view_plan", name=name))
-    plan.allocations.append(Allocation(cidr=str(planning.parse(cidr)), name=label, description=description))
+    p = _params()
+    cidr = (p.get("cidr") or "").strip()
+    rec = next((s for s in plan.supernets if s.cidr == cidr), None) \
+        or next((a for a in plan.allocations if a.cidr == cidr), None)
+    if rec is None:
+        return jsonify(ok=False, error=f"{cidr} not found"), 404
+    rec.name = (p.get("name") or "").strip()
+    rec.description = (p.get("description") or "").strip()
+    rec.tags = _split_tags(p.get("tags"))
     storage.save_plan(_plans_dir(), plan)
-    flash(f"Added allocation {cidr}", "ok")
-    return redirect(url_for("main.view_plan", name=name))
+    return jsonify(ok=True)
 
 
-@bp.post("/plans/<name>/carve")
-def carve(name: str):
+@bp.post("/plans/<name>/delete")
+def delete_record(name: str):
     plan = _load_or_404(name)
-    parent = (request.form.get("parent") or "").strip()
-    mode = (request.form.get("mode") or "").strip()
-    value_s = (request.form.get("value") or "").strip()
-    label = (request.form.get("new_name") or "").strip()
-    description = (request.form.get("description") or "").strip()
-    commit = request.form.get("commit") == "1"
-
-    try:
-        value = int(value_s)
-    except ValueError:
-        flash("Value must be an integer.", "error")
-        return redirect(url_for("main.view_plan", name=name))
-
-    kwargs: dict[str, int] = {}
-    if mode == "prefix":
-        kwargs["prefix_length"] = value
-    elif mode == "hosts":
-        kwargs["host_count"] = value
-    elif mode == "split":
-        kwargs["count"] = value
+    p = _params()
+    cidr = (p.get("cidr") or "").strip()
+    kind = p.get("kind", "allocation")
+    before_super = len(plan.supernets)
+    before_alloc = len(plan.allocations)
+    if kind == "supernet":
+        plan.supernets = [s for s in plan.supernets if s.cidr != cidr]
     else:
-        flash(f"Unknown carve mode: {mode}", "error")
-        return redirect(url_for("main.view_plan", name=name))
+        plan.allocations = [a for a in plan.allocations if a.cidr != cidr]
+    if (len(plan.supernets) == before_super
+            and len(plan.allocations) == before_alloc):
+        return jsonify(ok=False, error=f"{cidr} not found"), 404
+    storage.save_plan(_plans_dir(), plan)
+    return jsonify(ok=True)
 
-    existing = [s.cidr for s in plan.supernets] + [a.cidr for a in plan.allocations]
-    try:
-        suggestions = planning.carve(parent, existing, **kwargs)
-    except ValueError as e:
-        flash(str(e), "error")
-        return redirect(url_for("main.view_plan", name=name))
 
-    if not suggestions:
-        flash(f"No free slot in {parent} matches that request.", "error")
-        return redirect(url_for("main.view_plan", name=name))
+@bp.post("/plans/<name>/commit_carve")
+def commit_carve(name: str):
+    """Apply a list of pre-computed carved allocations atomically.
 
-    if not commit:
-        flash(
-            f"Suggested: {', '.join(suggestions)}. "
-            "Submit again with 'Confirm' checked to commit.",
-            "info",
-        )
-        return redirect(url_for("main.view_plan", name=name))
+    Body (JSON): {
+        "allocations": [
+            {"cidr": "...", "name": "...", "description": "...", "tags": [...]},
+            ...
+        ]
+    }
 
-    for i, cidr in enumerate(suggestions):
-        alloc_name = label if len(suggestions) == 1 else f"{label} #{i + 1}" if label else ""
+    Each entry is validated through validate_new_allocation against the plan
+    *as it grows*, so two same-CIDR proposals would reject the second.
+    """
+    plan = _load_or_404(name)
+    p = _params()
+    items = p.get("allocations") or []
+    if not isinstance(items, list) or not items:
+        return jsonify(ok=False, error="no allocations to commit"), 400
+
+    committed = []
+    rejected = []
+    for entry in items:
+        cidr = (entry.get("cidr") or "").strip()
+        try:
+            planning.parse_strict(cidr)
+        except ValueError as e:
+            rejected.append({"cidr": cidr, "error": f"invalid CIDR: {e}"})
+            continue
         ok, reason = planning.validate_new_allocation(plan, cidr)
         if not ok:
-            flash(f"Rejected {cidr}: {reason}", "error")
+            rejected.append({"cidr": cidr, "error": reason})
             continue
-        plan.allocations.append(Allocation(cidr=cidr, name=alloc_name, description=description))
-    storage.save_plan(_plans_dir(), plan)
-    flash(f"Committed: {', '.join(suggestions)}", "ok")
-    return redirect(url_for("main.view_plan", name=name))
+        plan.allocations.append(Allocation(
+            cidr=str(planning.parse(cidr)),
+            name=(entry.get("name") or "").strip(),
+            description=(entry.get("description") or "").strip(),
+            tags=[t for t in (entry.get("tags") or []) if isinstance(t, str)],
+        ))
+        committed.append(cidr)
 
+    if committed:
+        storage.save_plan(_plans_dir(), plan)
+    return jsonify(ok=bool(committed), committed=committed, rejected=rejected)
+
+
+# ---------------------------------------------------------------------------
+# Infoblox CSV import (multipart-form upload, returns JSON)
+# ---------------------------------------------------------------------------
 
 @bp.post("/plans/<name>/import_infoblox")
 def import_infoblox(name: str):
     plan = _load_or_404(name)
     file = request.files.get("file")
     if not file or not file.filename:
-        flash("No file uploaded.", "error")
-        return redirect(url_for("main.view_plan", name=name))
+        return jsonify(ok=False, error="no file uploaded"), 400
     try:
         text = file.read().decode("utf-8", errors="replace")
     except Exception as e:
-        flash(f"Could not read upload: {e}", "error")
-        return redirect(url_for("main.view_plan", name=name))
+        return jsonify(ok=False, error=f"could not read upload: {e}"), 400
 
     result = infoblox.parse_infoblox_csv(text)
 
     added_super = added_alloc = skipped_dup = 0
-    rejected: list[str] = []
+    rejected: list[dict] = []
 
     for s in result["supernets"]:
         ok, reason = planning.validate_new_allocation(plan, s.cidr)
@@ -195,7 +323,7 @@ def import_infoblox(name: str):
             if "duplicate" in reason.lower():
                 skipped_dup += 1
             else:
-                rejected.append(f"{s.cidr}: {reason}")
+                rejected.append({"cidr": s.cidr, "error": reason})
             continue
         plan.supernets.append(s)
         added_super += 1
@@ -206,41 +334,18 @@ def import_infoblox(name: str):
             if "duplicate" in reason.lower():
                 skipped_dup += 1
             else:
-                rejected.append(f"{a.cidr}: {reason}")
+                rejected.append({"cidr": a.cidr, "error": reason})
             continue
         plan.allocations.append(a)
         added_alloc += 1
 
     if added_super or added_alloc:
         storage.save_plan(_plans_dir(), plan)
-
-    summary = f"Imported {added_super} supernets, {added_alloc} allocations"
-    extras = []
-    if skipped_dup:
-        extras.append(f"skipped {skipped_dup} duplicates")
-    if rejected:
-        extras.append(f"{len(rejected)} rejected (overlap)")
-    if result["errors"]:
-        extras.append(f"{len(result['errors'])} parse errors")
-    if extras:
-        summary += " (" + "; ".join(extras) + ")"
-    flash(summary + ".", "ok" if (added_super or added_alloc) else "info")
-    for e in result["errors"][:10]:
-        flash(e, "error")
-    for r in rejected[:10]:
-        flash(r, "error")
-    return redirect(url_for("main.view_plan", name=name))
-
-
-@bp.post("/plans/<name>/delete")
-def delete_allocation(name: str):
-    plan = _load_or_404(name)
-    cidr = (request.form.get("cidr") or "").strip()
-    kind = request.form.get("kind", "allocation")
-    if kind == "supernet":
-        plan.supernets = [s for s in plan.supernets if s.cidr != cidr]
-    else:
-        plan.allocations = [a for a in plan.allocations if a.cidr != cidr]
-    storage.save_plan(_plans_dir(), plan)
-    flash(f"Removed {cidr}", "ok")
-    return redirect(url_for("main.view_plan", name=name))
+    return jsonify(
+        ok=True,
+        added_supernets=added_super,
+        added_allocations=added_alloc,
+        skipped_duplicates=skipped_dup,
+        rejected=rejected,
+        parse_errors=result["errors"],
+    )

@@ -33,9 +33,15 @@ app/infoblox.py    pure CSV parser for Infoblox exports; no Flask, no I/O
 app/storage.py     JSON load/save; no Flask
 app/models.py      dataclasses; no Flask
 app/routes.py      HTTP surface; calls planning + infoblox + storage
-app/templates/     server-rendered HTML (Jinja)
+app/templates/     Jinja: index.html (server-rendered table) + plan.html (SPA shell)
 app/static/        CSS + D3 viz.js (no build step, load D3 from CDN)
 ```
+
+The **plans index** is server-rendered (a static table). The **plan view** is
+a thin Jinja shell that fetches `/plans/<name>/plan.json` once at load and
+re-fetches after every mutation; almost all interactivity lives in
+`app/static/viz.js`. Mutating routes return JSON (`{ok, error?}`) — no
+flash-redirect cycle on the plan page.
 
 **Rule:** `planning.py` stays pure. No imports from Flask, no file I/O, no
 global state. Every function takes data in and returns data out. This is what

@@ -1,34 +1,72 @@
 {% extends "base.html" %}
-{% block title %}Plans — Visual Network Planning{% endblock %}
-{% block content %}
-<section class="card">
-  <h1>Plans</h1>
-  {% if plans %}
-    <ul class="plan-list">
-      {% for p in plans %}
-        <li>
-          <a href="{{ url_for('main.view_plan', name=p) }}">{{ p }}</a>
-          <form method="post" action="{{ url_for('main.delete_plan', name=p) }}"
-                onsubmit="return confirm('Delete plan {{ p }}? The JSON file will be removed.');">
-            <button class="link-danger" type="submit">delete</button>
-          </form>
-        </li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p class="muted">No plans yet. Create one below.</p>
-  {% endif %}
-</section>
+{% block title %}plans · vnp{% endblock %}
+{% block breadcrumbs %}
+  <span class="current">plans</span>
+{% endblock %}
 
-<section class="card">
-  <h2>New plan</h2>
-  <form method="post" action="{{ url_for('main.create_plan') }}" class="inline-form">
-    <label>Name
-      <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
-             placeholder="e.g. lab, corp-2026">
-    </label>
-    <button type="submit">Create</button>
+{% block content %}
+<div class="index-wrap">
+  <h1>plans</h1>
+  <p class="lede">Each plan is a <code>plans/&lt;name&gt;.json</code> on disk &mdash; diff-friendly and intentionally local.</p>
+
+  {% if plans %}
+    <table class="plan-table" style="margin-bottom: 24px;">
+      <thead><tr>
+        <th style="width: 22%">name</th>
+        <th>scope</th>
+        <th style="width: 8%">supernets</th>
+        <th style="width: 8%">allocs</th>
+        <th style="width: 16%">utilization</th>
+        <th style="width: 16%">modified</th>
+        <th style="width: 12%">status</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+        {% for p in plans %}
+          {% if p.error %}
+            <tr><td class="name">{{ p.name }}</td>
+                <td colspan="6" style="color: var(--err);">unreadable plan file</td>
+                <td></td></tr>
+          {% else %}
+            <tr>
+              <td class="name"><a href="{{ url_for('main.view_plan', name=p.name) }}">{{ p.name }}</a></td>
+              <td>{{ p.scope }}</td>
+              <td>{{ p.supernets }}</td>
+              <td>{{ p.allocations }}</td>
+              <td>
+                <div class="density-bar" style="display:inline-block; vertical-align:-1px; width:80px;">
+                  <div class="fill" style="width:{{ p.utilization_pct }}%"></div>
+                </div>
+                <span style="color:var(--fg-2)"> {{ p.utilization_pct }}%</span>
+              </td>
+              <td>{{ p.modified[:16].replace('T', ' ') if p.modified else '—' }}</td>
+              <td><span class="pill {{ p.status_kind }}">{{ p.status_label }}</span></td>
+              <td>
+                <form class="del" method="post" action="{{ url_for('main.delete_plan', name=p.name) }}"
+                      onsubmit="return confirm('Delete plan {{ p.name }}? The JSON file will be removed.');">
+                  <button class="linkdel" type="submit" title="Delete plan">×</button>
+                </form>
+              </td>
+            </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p style="color: var(--fg-2); padding: 16px 0;">No plans yet. Create one below.</p>
+  {% endif %}
+
+  <h3 style="font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--fg-2); margin: 28px 0 8px;">new plan</h3>
+  <form method="post" action="{{ url_for('main.create_plan') }}">
+    <div style="display:flex; gap:8px; align-items:flex-end; max-width: 520px;">
+      <div class="field" style="flex:1; margin:0;">
+        <span class="lbl">name</span>
+        <input type="text" name="name" placeholder="lab, corp-2026, dr-site"
+               required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}">
+      </div>
+      <button class="btn primary" type="submit">create plan</button>
+    </div>
+    <p class="hint" style="margin-top: 6px;">letters · digits · dot · underscore · hyphen — up to 64 chars</p>
   </form>
-  <p class="muted small">Letters, digits, dot, underscore, hyphen. Up to 64 chars.</p>
-</section>
+</div>
 {% endblock %}

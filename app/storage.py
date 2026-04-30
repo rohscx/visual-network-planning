@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from pathlib import Path
@@ -51,3 +52,12 @@ def create_plan(plans_dir: Path, name: str) -> Plan:
     plan = Plan(name=name)
     save_plan(plans_dir, plan)
     return plan
+
+
+def plan_modified(plans_dir: Path, name: str) -> str:
+    """ISO-8601 mtime of a plan file (UTC, second-precision)."""
+    path = plan_path(plans_dir, name)
+    if not path.exists():
+        return ""
+    ts = _dt.datetime.fromtimestamp(path.stat().st_mtime, _dt.timezone.utc)
+    return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")

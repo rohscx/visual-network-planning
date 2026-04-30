@@ -1,138 +1,245 @@
 {% extends "base.html" %}
-{% block title %}{{ plan.name }} — Visual Network Planning{% endblock %}
+{% block title %}{{ plan_name }} · vnp{% endblock %}
+
+{% block brand_extra %}
+  <span class="sep">/</span>
+  <span class="plan">{{ plan_name }}</span>
+{% endblock %}
+
+{% block breadcrumbs %}
+  <a href="{{ url_for('main.index') }}">plans</a>
+  <span class="arrow">›</span>
+  <span class="current">{{ plan_name }}</span>
+  <span class="badge" id="badgeSupers">– supernets</span>
+  <span class="badge" id="badgeAllocs">– allocs</span>
+  <span class="badge" id="badgeUtil">– util</span>
+{% endblock %}
+
+{% block topbar_actions %}
+  <button class="iconbtn" id="searchBtn" title="Search (/)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    <span>search</span>
+    <kbd>/</kbd>
+  </button>
+  <button class="iconbtn" id="exportBtn" title="Download plan as JSON">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    <span>export</span>
+  </button>
+{% endblock %}
+
 {% block content %}
-<nav class="crumbs">
-  <a href="{{ url_for('main.index') }}">← All plans</a>
-  <span class="plan-name">{{ plan.name }}</span>
-</nav>
 
-{% if tree.orphans %}
-  <div class="warn">
-    <strong>Orphan allocations</strong> (not inside any supernet):
-    {% for o in tree.orphans %}<code>{{ o.cidr }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
-  </div>
-{% endif %}
+<!-- search bar (toggled with /) -->
+<div class="searchbar" id="searchbar">
+  <span style="font-family:'JetBrains Mono',monospace; color:var(--fg-3); font-size:11px;">/</span>
+  <input type="text" id="searchInput" placeholder="Search by CIDR, name, or tag — Esc to close">
+  <span class="matches" id="searchMatches"></span>
+  <button class="x" id="searchCloseBtn" title="Close (Esc)">×</button>
+</div>
 
-{% if conflicts %}
-  <div class="error-banner">
-    <strong>Conflicts detected:</strong>
-    <ul>
-    {% for a, b in conflicts %}
-      <li><code>{{ a }}</code> ⇄ <code>{{ b }}</code></li>
-    {% endfor %}
-    </ul>
-  </div>
-{% endif %}
+<!-- banner: orphans -->
+<div class="banner" id="orphanBanner" style="display:none;">
+  <span>⚠</span>
+  <span><strong id="orphanCount">0 orphan</strong> &mdash; not inside any supernet:</span>
+  <span class="mono" id="orphanList"></span>
+</div>
 
-<div class="layout">
+<!-- banner: conflicts -->
+<div class="banner err" id="conflictBanner" style="display:none;">
+  <span>✕</span>
+  <span><strong id="conflictCount">0 conflicts</strong> &mdash; overlapping allocations:</span>
+  <span class="mono" id="conflictList"></span>
+</div>
 
-  <aside class="pane pane-left">
-    <h2>Hierarchy</h2>
-    {% if tree.roots %}
-      <ul class="tree">
-        {% macro rendernode(node) %}
-          <li>
-            <div class="node{% if node.is_supernet %} node-supernet{% endif %}">
-              <code class="cidr">{{ node.cidr }}</code>
-              {% if node.name %}<span class="label">{{ node.name }}</span>{% endif %}
-              <span class="usage">
-                {%- set used = node.used_addresses -%}
-                {%- set total = node.total_addresses -%}
-                {{ used }}/{{ total }}
-                {% if total > 0 %}({{ (100 * used / total) | round(1) }}%){% endif %}
-              </span>
-              <form method="post" action="{{ url_for('main.delete_allocation', name=plan.name) }}"
-                    class="inline-delete"
-                    onsubmit="return confirm('Remove {{ node.cidr }}?');">
-                <input type="hidden" name="cidr" value="{{ node.cidr }}">
-                <input type="hidden" name="kind" value="{% if node.is_supernet %}supernet{% else %}allocation{% endif %}">
-                <button class="link-danger small" type="submit">×</button>
-              </form>
-            </div>
-            {% if node.children or node.free %}
-              <ul>
-                {% for c in node.children %}{{ rendernode(c) }}{% endfor %}
-                {% for f in node.free %}
-                  <li class="free-slot"><code>{{ f }}</code> <span class="muted small">free</span></li>
-                {% endfor %}
-              </ul>
-            {% endif %}
-          </li>
-        {% endmacro %}
-        {% for root in tree.roots %}{{ rendernode(root) }}{% endfor %}
-      </ul>
-    {% else %}
-      <p class="muted">No supernets yet. Add one on the right to begin.</p>
-    {% endif %}
+<div class="app">
+  <!-- LEFT: hierarchy -->
+  <aside class="sidebar">
+    <div class="head">
+      <span>hierarchy.tree</span>
+      <span class="count" id="treeCount">0 nodes</span>
+    </div>
+    <div class="meta-row"><span class="k">plan</span><span class="v">{{ plan_name }}</span></div>
+    <div class="meta-row"><span class="k">space</span><span class="v" id="metaSpace">—</span></div>
+    <div class="meta-row"><span class="k">utilization</span><span class="v acc" id="metaUtil">—</span></div>
+    <div class="meta-row"><span class="k">conflicts</span><span class="v" id="metaConflicts">0</span></div>
+    <div class="tree" id="tree"></div>
   </aside>
 
-  <section class="pane pane-center">
-    <h2>Visualization</h2>
-    <p class="muted small">Colored blocks = allocated. Gray = free. Click a supernet in the list to focus.</p>
-    <div id="viz" data-tree-url="{{ url_for('main.tree_json', name=plan.name) }}"></div>
+  <!-- CENTER: viz hero -->
+  <section class="stage">
+    <div class="stage-toolbar">
+      <div class="seg" role="tablist" aria-label="color mode">
+        <button data-color="state" aria-pressed="true">used·free</button>
+        <button data-color="tag"   aria-pressed="false">by tag</button>
+        <button data-color="util"  aria-pressed="false">by util</button>
+      </div>
+      <div class="seg" role="tablist" aria-label="zoom">
+        <button data-zoom="all"   aria-pressed="true">all supernets</button>
+        <button data-zoom="focus" aria-pressed="false">focus selected</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="legend" id="legend"></div>
+      <span class="tag-filter" id="tagFilter">
+        <span>tag: <strong id="tagFilterLabel"></strong></span>
+        <button class="x" id="tagFilterClear" title="Clear filter">×</button>
+      </span>
+    </div>
+    <div class="viz-wrap" id="vizWrap">
+      <div id="viz"></div>
+    </div>
+    <div class="statusbar">
+      <span><span class="ok">●</span> ready</span>
+      <span id="statSel">no selection</span>
+      <span></span>
+      <span><kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>t</kbd> theme</span>
+    </div>
   </section>
 
-  <aside class="pane pane-right">
-    <h2>Import Infoblox CSV</h2>
-    <form method="post" enctype="multipart/form-data"
-          action="{{ url_for('main.import_infoblox', name=plan.name) }}">
-      <label>CSV file
-        <input type="file" name="file" accept=".csv,text/csv" required>
-      </label>
-      <button type="submit">Import</button>
-      <p class="muted small">
-        <code>networkcontainer</code> rows become supernets;
-        <code>network</code> rows become allocations.
-        Duplicates are skipped; overlaps are reported.
-      </p>
-    </form>
+  <!-- RIGHT: command rail -->
+  <aside class="rail">
+    <div class="rail-tabs" role="tablist">
+      <button data-tab="add"    aria-selected="true">+ add</button>
+      <button data-tab="carve"  aria-selected="false">⊞ carve</button>
+      <button data-tab="import" aria-selected="false">↥ import</button>
+    </div>
 
-    <h2>Add supernet</h2>
-    <form method="post" action="{{ url_for('main.add_supernet', name=plan.name) }}">
-      <label>CIDR<input name="cidr" required placeholder="10.0.0.0/16"></label>
-      <label>Name<input name="name" placeholder="Corp HQ"></label>
-      <label>Description<input name="description"></label>
-      <button type="submit">Add supernet</button>
-    </form>
+    <!-- ADD -->
+    <div class="panel" data-panel="add">
+      <h3>add to plan</h3>
+      <p class="hint">Add a top-level supernet you own, or an existing allocation seen in the wild.</p>
+      <div class="field">
+        <span class="lbl">type</span>
+        <div class="seg" style="width:100%" id="addKind">
+          <button data-add-kind="supernet"   aria-pressed="true"  style="flex:1">supernet</button>
+          <button data-add-kind="allocation" aria-pressed="false" style="flex:1">allocation</button>
+        </div>
+      </div>
+      <div class="field"><span class="lbl">cidr</span>
+        <input type="text" placeholder="10.0.0.0/16" id="addCidr"></div>
+      <div class="row2">
+        <div class="field"><span class="lbl">name</span>
+          <input type="text" placeholder="corp-hq" id="addName"></div>
+        <div class="field"><span class="lbl">tags</span>
+          <input type="text" placeholder="prod, aws, az1" id="addTags"></div>
+      </div>
+      <div class="field"><span class="lbl">description</span>
+        <input type="text" placeholder="(optional)" id="addDesc"></div>
+      <div class="commit-row">
+        <button class="btn primary" id="addSubmit">add</button>
+        <button class="btn ghost" id="addReset" type="button">clear</button>
+      </div>
+    </div>
 
-    <h2>Add existing allocation</h2>
-    <form method="post" action="{{ url_for('main.add_allocation', name=plan.name) }}">
-      <label>CIDR<input name="cidr" required placeholder="10.0.1.0/24"></label>
-      <label>Name<input name="name" placeholder="prod-web"></label>
-      <label>Description<input name="description"></label>
-      <button type="submit">Add allocation</button>
-    </form>
+    <!-- CARVE -->
+    <div class="panel" data-panel="carve" style="display:none">
+      <h3>carve subnet</h3>
+      <p class="hint">Run one query against <strong>multiple parents</strong> at once. Each gets its own first-free slot; commit applies them all.</p>
 
-    <h2>Carve subnet</h2>
-    <form method="post" action="{{ url_for('main.carve', name=plan.name) }}">
-      <label>Parent
-        <select name="parent" required>
-          <option value="">— pick a parent —</option>
-          {% for s in plan.supernets %}<option value="{{ s.cidr }}">{{ s.cidr }} {% if s.name %}({{ s.name }}){% endif %}</option>{% endfor %}
-          {% for a in plan.allocations %}<option value="{{ a.cidr }}">{{ a.cidr }} {% if a.name %}({{ a.name }}){% endif %}</option>{% endfor %}
-        </select>
-      </label>
-      <label>Mode
-        <select name="mode">
-          <option value="prefix">By prefix length (e.g. 24)</option>
-          <option value="hosts">By host count (e.g. 500)</option>
-          <option value="split">Equal split (count, power of 2)</option>
-        </select>
-      </label>
-      <label>Value <input name="value" type="number" min="1" required></label>
-      <label>New name <input name="new_name" placeholder="new-subnet"></label>
-      <label>Description <input name="description"></label>
-      <label class="checkbox">
-        <input type="checkbox" name="commit" value="1"> Confirm &amp; commit
-      </label>
-      <button type="submit">Carve</button>
-      <p class="muted small">Submit without confirm to preview the suggestion first.</p>
-    </form>
+      <div class="field">
+        <span class="lbl" style="display:flex; justify-content:space-between;">
+          <span>parents</span>
+          <span style="text-transform:none; letter-spacing:0; color:var(--fg-3);">
+            <button type="button" class="btn ghost" style="height:auto; padding:1px 6px; font-size:10px;" id="parentSelectAll">all</button>
+            <button type="button" class="btn ghost" style="height:auto; padding:1px 6px; font-size:10px;" id="parentSelectNone">none</button>
+            <button type="button" class="btn ghost" style="height:auto; padding:1px 6px; font-size:10px;" id="parentSelectSupers">supers</button>
+          </span>
+        </span>
+        <div id="parentPicker" class="parent-picker"></div>
+        <div style="font-size:10px; font-family:'JetBrains Mono',monospace; color:var(--fg-3); margin-top:4px;">
+          <span id="parentCount">0</span> selected
+        </div>
+      </div>
+
+      <div class="field"><span class="lbl">mode</span>
+        <div class="seg" style="width:100%" id="carveMode">
+          <button data-mode="prefix" aria-pressed="true"  style="flex:1">/prefix</button>
+          <button data-mode="hosts"  aria-pressed="false" style="flex:1">hosts</button>
+          <button data-mode="split"  aria-pressed="false" style="flex:1">split</button>
+        </div>
+      </div>
+      <div class="field" id="carveValueWrap"><span class="lbl" id="carveValueLbl">prefix length</span>
+        <input type="number" id="carveValue" value="28" min="1" max="32">
+      </div>
+      <div class="field"><span class="lbl">repeat <span style="color:var(--fg-3); text-transform:none; letter-spacing:0;">× per parent</span></span>
+        <input type="number" id="carveRepeat" value="1" min="1" max="64">
+      </div>
+      <div class="row2">
+        <div class="field"><span class="lbl">name template</span>
+          <input type="text" id="carveName" placeholder="prod-elb"></div>
+        <div class="field"><span class="lbl">tags</span>
+          <input type="text" id="carveTags" placeholder="aws, prod"></div>
+      </div>
+      <div class="hint" style="margin-top:-4px;">
+        Use <code>{parent}</code> or <code>{n}</code> in the name template — <code>{n}</code> resets per parent. e.g. <code>{parent}.elb-{n}</code>.
+      </div>
+
+      <div id="proposalsList" style="display:none; margin-top:12px;"></div>
+
+      <div class="commit-row">
+        <button class="btn" id="carvePreviewBtn">preview</button>
+        <button class="btn primary" id="carveCommitBtn" disabled>commit <span id="commitCount" style="opacity:0.7"></span></button>
+      </div>
+    </div>
+
+    <!-- IMPORT -->
+    <div class="panel" data-panel="import" style="display:none">
+      <h3>import infoblox csv</h3>
+      <p class="hint"><code>networkcontainer</code> → supernets, <code>network</code> → allocations. Names from <code>EA-Network Name</code>, tags from <code>EA-TAGS</code>. Duplicates skipped, overlaps reported.</p>
+      <form id="importForm" enctype="multipart/form-data">
+        <div class="field">
+          <span class="lbl">file</span>
+          <input type="file" name="file" id="importFile" accept=".csv,text/csv" required>
+        </div>
+        <div class="commit-row">
+          <button class="btn primary" type="submit">import</button>
+        </div>
+      </form>
+      <div id="importLast" style="display:none; margin-top: 18px; padding: 12px; border: 1px dashed var(--line); border-radius: 3px; font-size: 11px; color: var(--fg-2);">
+        <div style="font-family: 'JetBrains Mono', monospace; color: var(--fg-3); margin-bottom: 6px;">last import</div>
+        <div id="importLastBody"></div>
+      </div>
+    </div>
+
+    <!-- DETAIL slide-over -->
+    <div class="detail" id="detail" aria-hidden="true">
+      <div class="detail-head">
+        <h3 id="detailKind">node detail</h3>
+        <button class="x" id="detailClose" title="Close (Esc)">×</button>
+      </div>
+      <div class="detail-body">
+        <div class="detail-cidr" id="detailCidr" title="Click to copy">—</div>
+        <span class="detail-kind" id="detailKindBadge">allocation</span>
+
+        <div class="detail-stats">
+          <div class="detail-stat"><div class="k">size</div><div class="v" id="detailSize">—</div></div>
+          <div class="detail-stat"><div class="k">range</div><div class="v" id="detailRange" style="font-size:11px;">—</div></div>
+          <div class="detail-stat"><div class="k">parent</div><div class="v" id="detailParent" style="font-size:11px;">—</div></div>
+          <div class="detail-stat"><div class="k">utilization</div><div class="v" id="detailUtil">—</div></div>
+        </div>
+
+        <div class="field"><span class="lbl">name</span>
+          <input type="text" id="detailName" placeholder="(unnamed)"></div>
+        <div class="field"><span class="lbl">description</span>
+          <input type="text" id="detailDesc" placeholder="(none)"></div>
+        <div class="field"><span class="lbl">tags</span>
+          <input type="text" id="detailTags" placeholder="comma, separated"></div>
+      </div>
+      <div class="detail-foot">
+        <button class="btn ghost" id="detailDelete" style="color:var(--err); border-color:color-mix(in oklab, var(--err), transparent 70%);">delete</button>
+        <div style="display:flex; gap:6px;">
+          <button class="btn ghost" id="detailCancel">cancel</button>
+          <button class="btn primary" id="detailSave">save</button>
+        </div>
+      </div>
+    </div>
   </aside>
-
 </div>
+
+<div class="tooltip" id="tooltip"></div>
 {% endblock %}
+
 {% block scripts %}
+<script>window.PLAN_NAME = {{ plan_name|tojson }};</script>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="{{ url_for('static', filename='viz.js') }}"></script>
 {% endblock %}

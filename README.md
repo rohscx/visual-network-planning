@@ -20,6 +20,16 @@ python run.py
 
 Opens `http://127.0.0.1:5000` in your browser.
 
+## UI
+
+Three-pane plan view: hierarchy tree on the left, D3 nested-rectangle
+visualization in the middle (the hero), command rail on the right with
+**add / carve / import** tabs. Dark and light themes (toggle top-right
+or press <kbd>t</kbd>); JetBrains Mono for CIDRs, Geist Sans for prose.
+
+Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>t</kbd> theme ·
+<kbd>Esc</kbd> closes overlays.
+
 ## What it does
 
 - **Supernets** — top-level blocks you own (e.g. `10.0.0.0/16`).
@@ -28,12 +38,21 @@ Opens `http://127.0.0.1:5000` in your browser.
   - **prefix length** (`/24`),
   - **host count** (`500 hosts` → smallest prefix that fits), or
   - **equal split** (`4` → four equal power-of-two subnets).
-  The tool suggests the first free slot; confirm to commit.
+  Run one query against **multiple parents** at once with a per-parent
+  **repeat** count; preview the proposed CIDRs as dashed-mint overlays
+  in the viz, then commit them all atomically. Name template supports
+  `{parent}` and `{n}` (e.g. `{parent}.elb-{n}`, `{n}` resets per parent).
 - **Conflict detection** — duplicates and misaligned CIDRs are rejected.
   Allocations that don't sit inside any supernet are flagged as orphans.
+  Conflicts and orphans surface as click-to-jump banners.
 - **Visualization** — nested-rectangle view of each supernet, colored by
-  usage; free blocks labeled with their CIDR so you can see at a glance
-  where to carve next.
+  used·free / by tag / by utilization gradient. Hover any block for a
+  detail tooltip; click a free slot to pre-fill the carve form;
+  zoom into the selection.
+- **Detail panel** — click any node for a slide-over with editable name /
+  description / tags, plus delete.
+- **Search** — <kbd>/</kbd> to fuzzy-filter the tree by CIDR, name, or
+  tag; click any tag chip to filter the viz to that tag.
 - **Infoblox CSV import** — drop in a `network` / `networkcontainer`
   export from Infoblox and the tool seeds the plan: `networkcontainer`
   rows become supernets, `network` rows become allocations, names/tags
