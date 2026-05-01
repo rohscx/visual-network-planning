@@ -18,7 +18,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Opens `http://127.0.0.1:5000` in your browser.
+Opens `http://127.0.0.1:5050` in your browser.
 
 ## UI
 
@@ -101,8 +101,17 @@ pytest
 | Variable       | Default       | Purpose                                    |
 | -------------- | ------------- | ------------------------------------------ |
 | `HOST`         | `127.0.0.1`   | Bind address                               |
-| `PORT`         | `5000`        | Bind port                                  |
+| `PORT`         | `5050`        | Bind port (avoid `5000` — see below)       |
 | `NO_BROWSER=1` | *unset*       | Skip auto-opening a browser on startup     |
+
+### Why not port 5000?
+
+macOS Monterey+ runs the **AirPlay Receiver** on port 5000 by default and
+returns `403 Forbidden` to any non-AirPlay request. If you bind Flask to
+`5000` your terminal will look happy, but the browser will still hit
+AirPlay first and you'll see `HTTP ERROR 403`. We default to `5050` to
+sidestep that. If you'd rather keep `5000`, turn AirPlay Receiver off in
+**System Settings → General → AirDrop & Handoff**.
 
 ## Scope
 

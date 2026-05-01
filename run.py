@@ -9,7 +9,9 @@ import webbrowser
 from app import create_app
 
 HOST = os.environ.get("HOST", "127.0.0.1")
-PORT = int(os.environ.get("PORT", "5000"))
+# Default 5050: macOS AirPlay Receiver squats on port 5000 by default and
+# returns 403 to non-AirPlay requests, which masquerades as a Flask error.
+PORT = int(os.environ.get("PORT", "5050"))
 OPEN_BROWSER = os.environ.get("NO_BROWSER") != "1"
 
 
