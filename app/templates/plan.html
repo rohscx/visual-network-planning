@@ -140,9 +140,14 @@
       <p class="hint">Run one query against <strong>multiple parents</strong> at once. Each gets its own first-free slot; commit applies them all.</p>
 
       <div class="field" id="parentTagFilterField" style="display:none;">
-        <span class="lbl" style="display:flex; justify-content:space-between;">
+        <span class="lbl" style="display:flex; justify-content:space-between; align-items:center;">
           <span>filter by tag</span>
-          <span style="text-transform:none; letter-spacing:0; color:var(--fg-3);">any of</span>
+          <span class="seg" id="parentTagMode" role="tablist"
+                style="text-transform:none; letter-spacing:0;"
+                title="Match any of the selected tags (OR) vs. require all of them (AND)">
+            <button type="button" data-tag-mode="any" aria-pressed="true"  style="padding:2px 8px; font-size:10px;">any</button>
+            <button type="button" data-tag-mode="all" aria-pressed="false" style="padding:2px 8px; font-size:10px;">all</button>
+          </span>
         </span>
         <div id="parentTagFilter" class="tag-chip-row"></div>
       </div>

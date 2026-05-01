@@ -752,11 +752,20 @@ function eligibleParents() {
 }
 
 const SELECTED_PARENT_TAGS = new Set();
+let PARENT_TAG_MODE = 'any';   // 'any' = OR, 'all' = AND
 
-// Apply the tag filter (OR semantics — show parents matching any selected tag).
+// Apply the tag filter using the active mode.
 function filteredEligibleParents() {
   const all = eligibleParents();
   if (SELECTED_PARENT_TAGS.size === 0) return all;
+  if (PARENT_TAG_MODE === 'all') {
+    const wanted = [...SELECTED_PARENT_TAGS];
+    return all.filter(it => {
+      const have = new Set(it.tags || []);
+      return wanted.every(t => have.has(t));
+    });
+  }
+  // 'any' (default): match parents carrying at least one selected tag.
   return all.filter(it => (it.tags || []).some(t => SELECTED_PARENT_TAGS.has(t)));
 }
 
@@ -1214,6 +1223,18 @@ document.querySelectorAll('[data-add-kind]').forEach(b => {
   });
 });
 syncAddKindHint();
+// any/all toggle for the parent tag filter. Re-filters on every flip;
+// only relevant when at least one tag chip is active.
+document.querySelectorAll('#parentTagMode button').forEach(b => {
+  b.addEventListener('click', () => {
+    PARENT_TAG_MODE = b.dataset.tagMode;
+    document.querySelectorAll('#parentTagMode button').forEach(x =>
+      x.setAttribute('aria-pressed', x.dataset.tagMode === PARENT_TAG_MODE ? 'true' : 'false')
+    );
+    populateParents();
+  });
+});
+
 // "all" / "supers" act on the *visible* (filter-respecting) list. "none"
 // always clears everything regardless of filter.
 document.getElementById('parentSelectAll').addEventListener('click', () => {
