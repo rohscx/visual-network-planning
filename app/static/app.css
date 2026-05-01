@@ -690,6 +690,12 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .proposal .icon { color: var(--acc); }
 .proposal.no-fit .icon { color: var(--err); }
 .proposal .pcidr { font-size: 12px; font-weight: 600; color: var(--fg); }
+.proposal .pcidr .pname {
+  margin-left: 8px;
+  font-weight: 400;
+  color: var(--fg-2);
+  font-size: 11px;
+}
 .proposal .pmeta { color: var(--fg-3); font-size: 10px; }
 .proposal .pmeta b { color: var(--fg-2); font-weight: 500; }
 

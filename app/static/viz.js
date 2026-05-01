@@ -990,6 +990,13 @@ function runPreview(forcedCidr, forcedParent) {
   renderViz();
 }
 
+function resolveCarveName(tmpl, parentCidr, n) {
+  if (!tmpl) return '';
+  const it = TREE.items.find(i => i.cidr === parentCidr);
+  const parentLabel = (it && it.name) || parentCidr;
+  return tmpl.replaceAll('{parent}', parentLabel).replaceAll('{n}', String(n));
+}
+
 function renderProposals() {
   const list = document.getElementById('proposalsList');
   if (!STATE.proposals.length) {
@@ -999,6 +1006,11 @@ function renderProposals() {
   }
   list.style.display = '';
   list.innerHTML = '';
+  // Resolve each proposed child's name from the current template, with {n}
+  // resetting per parent — so preview matches what commit will actually
+  // produce.
+  const tmpl = document.getElementById('carveName').value || '';
+  const perParentIdx = {};
   let okCount = 0;
   STATE.proposals.forEach((p) => {
     const row = document.createElement('div');
@@ -1012,11 +1024,16 @@ function renderProposals() {
       : `<b>${p.parent}</b>`;
     if (p.cidr) {
       okCount++;
+      perParentIdx[p.parent] = (perParentIdx[p.parent] || 0) + 1;
+      const childName = resolveCarveName(tmpl, p.parent, perParentIdx[p.parent]);
+      const childNameHtml = childName
+        ? `<span class="pname">${escapeHtml(childName)}</span>`
+        : '';
       const pi = cidrInfo(p.cidr);
       row.innerHTML = `
         <span class="icon">▸</span>
         <div>
-          <div class="pcidr">${p.cidr}</div>
+          <div class="pcidr">${p.cidr}${childNameHtml}</div>
           <div class="pmeta">in ${parentLabel} · ${fmtBytes(pi.size)} addrs · /${pi.prefix}</div>
         </div>
         <span class="pill ok">fit</span>
@@ -1045,12 +1062,12 @@ async function commitCarve() {
   const perParentIdx = {};
   const allocations = ok.map((p) => {
     perParentIdx[p.parent] = (perParentIdx[p.parent] || 0) + 1;
-    let name = tmpl;
-    if (tmpl) {
-      const parentLabel = (TREE.items.find(it=>it.cidr===p.parent)?.name) || p.parent;
-      name = tmpl.replaceAll('{parent}', parentLabel).replaceAll('{n}', String(perParentIdx[p.parent]));
-    }
-    return { cidr: p.cidr, name, description: '', tags };
+    return {
+      cidr: p.cidr,
+      name: resolveCarveName(tmpl, p.parent, perParentIdx[p.parent]),
+      description: '',
+      tags,
+    };
   });
 
   try {
@@ -1328,6 +1345,12 @@ document.getElementById('parentSelectSupers').addEventListener('click', () => {
 });
 document.getElementById('carvePreviewBtn').addEventListener('click', () => runPreview());
 document.getElementById('carveCommitBtn').addEventListener('click', commitCarve);
+
+// Live-update proposal name labels as the template is edited — saves a
+// click on "preview" just to see the substituted names.
+document.getElementById('carveName').addEventListener('input', () => {
+  if (STATE.proposals.length) renderProposals();
+});
 
 document.getElementById('addSubmit').addEventListener('click', addRecord);
 document.getElementById('addReset').addEventListener('click', resetAdd);
