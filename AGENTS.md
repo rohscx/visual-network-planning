@@ -111,6 +111,11 @@ person names, AWS account IDs). **Never commit a real export.** Tests use
 RFC 5737 documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
 `203.0.113.0/24`) and inline string fixtures.
 
+The accepted CSV format (required columns, multiple-header behavior,
+mapping into the plan model, error handling) is documented in
+[`docs/infoblox-csv-schema.md`](docs/infoblox-csv-schema.md). Keep that
+doc in sync with `app/infoblox.py` if you change parser behavior.
+
 ## Persistence
 
 - One plan per file: `plans/<name>.json`.

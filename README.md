@@ -64,6 +64,9 @@ Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>t</kbd> theme ·
   export from Infoblox and the tool seeds the plan: `networkcontainer`
   rows become supernets, `network` rows become allocations, names/tags
   come from the `EA-Network Name` and `EA-TAGS` extensible attributes.
+  See [`docs/infoblox-csv-schema.md`](docs/infoblox-csv-schema.md) for
+  the exact format vnp accepts (including how to author one from
+  scratch if you don't have an Infoblox export).
 
 ## Layout
 

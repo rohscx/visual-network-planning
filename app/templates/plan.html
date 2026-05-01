@@ -188,7 +188,13 @@
     <!-- IMPORT -->
     <div class="panel" data-panel="import" style="display:none">
       <h3>import infoblox csv</h3>
-      <p class="hint"><code>networkcontainer</code> → supernets, <code>network</code> → allocations. Names from <code>EA-Network Name</code>, tags from <code>EA-TAGS</code>. Duplicates skipped, overlaps reported.</p>
+      <p class="hint">
+        <code>networkcontainer</code> → supernets, <code>network</code> → allocations.
+        Names from <code>EA-Network Name</code>, tags from <code>EA-TAGS</code>.
+        Duplicates skipped, overlaps reported.
+        <a href="https://github.com/rohscx/visual-network-planning/blob/main/docs/infoblox-csv-schema.md"
+           target="_blank" rel="noopener" style="color:var(--acc-2)">CSV schema →</a>
+      </p>
       <form id="importForm" enctype="multipart/form-data">
         <div class="field">
           <span class="lbl">file</span>
