@@ -139,7 +139,7 @@ def plan_json(name: str):
     tree = planning.build_tree(plan)
     conflicts = planning.find_conflicts(plan)
     orphans = planning.find_orphans(plan)
-    return jsonify({
+    resp = jsonify({
         "name": plan.name,
         "supernets": [s.to_dict() for s in plan.supernets],
         "allocations": [a.to_dict() for a in plan.allocations],
@@ -148,6 +148,10 @@ def plan_json(name: str):
         "conflicts": [list(p) for p in conflicts],
         "orphans": orphans,
     })
+    # The plan view re-fetches this after every mutation; never let a cache
+    # serve a stale snapshot.
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 
 @bp.get("/plans/<name>/tree.json")

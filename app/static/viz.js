@@ -153,7 +153,10 @@ const SELECTED_PARENTS = new Set();
 
 async function fetchPlan() {
   try {
-    const r = await fetch(URL_PLAN, { headers: { 'Accept': 'application/json' } });
+    const r = await fetch(URL_PLAN, {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store',  // disk cache served stale data after a commit
+    });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     PLAN = {
@@ -174,6 +177,7 @@ async function refresh() {
   populateParents();
   renderTree();
   renderViz();
+  renderProposals();   // STATE.proposals may have been cleared mid-flow
   updateLegend();
   refreshBanners();
   updateBreadcrumbs();
