@@ -524,9 +524,35 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
   const parentInfo = cidrInfo(node.cidr);
   const scale = innerW / parentInfo.size;
 
-  for (const p of pieces) {
-    const pw = p.size * scale;
-    const px = innerX + (p.start - parentInfo.start) * scale;
+  // Minimum visible width for non-free blocks. A /28 inside a /16 is 1/4096
+  // of the parent's width — about 0.24 px at 1000 px wide, i.e. invisible.
+  // Force allocations and reservations to render at least this wide, and
+  // shrink free pieces proportionally to compensate. Free pieces have no
+  // floor; a tiny gap can collapse to zero.
+  const MIN_BLOCK_PX = 6;
+  const naturalPw = pieces.map(p => p.size * scale);
+  let allocDeficit = 0;   // px we owe to undersized non-free pieces
+  let freeTotal = 0;      // px currently allocated to free pieces (donor pool)
+  for (let i = 0; i < pieces.length; i++) {
+    if (pieces[i].kind === 'free') {
+      freeTotal += naturalPw[i];
+    } else if (naturalPw[i] < MIN_BLOCK_PX) {
+      allocDeficit += (MIN_BLOCK_PX - naturalPw[i]);
+    }
+  }
+  const freeShrink = freeTotal > 0
+    ? Math.max(0, (freeTotal - allocDeficit) / freeTotal)
+    : 1;
+
+  let cursor = innerX;
+  for (let i = 0; i < pieces.length; i++) {
+    const p = pieces[i];
+    const pw = (p.kind === 'free')
+      ? naturalPw[i] * freeShrink
+      : Math.max(naturalPw[i], MIN_BLOCK_PX);
+    const px = cursor;
+    cursor += pw;
+
     if (p.kind === 'free') {
       const fg = svg.append('g')
         .attr('class', 'viz-block is-free' +
@@ -590,7 +616,9 @@ function drawProposalOverlays(svg, root, x, y, w, h) {
     const hostInfo = cidrInfo(host.cidr);
     const scale = innerW / hostInfo.size;
     const px = innerX + (pi.start - hostInfo.start) * scale;
-    const pw = pi.size * scale;
+    // Mirror the min-width treatment in drawNode so tiny proposed carves
+    // (e.g. /28 in a /16) remain visible during preview.
+    const pw = Math.max(pi.size * scale, 6);
 
     const og = svg.append('g').attr('class', 'viz-block proposed').attr('data-cidr', p.cidr);
     og.append('rect')
