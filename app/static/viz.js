@@ -1003,6 +1003,13 @@ function renderProposals() {
   STATE.proposals.forEach((p) => {
     const row = document.createElement('div');
     row.className = 'proposal' + (p.cidr ? '' : ' no-fit');
+    // Look up the parent's human-readable name so the preview row reads
+    // "in 10.166.0.0/18 (ent-a-us.e1.prd) ..." instead of just the CIDR.
+    const parentItem = TREE.items.find(it => it.cidr === p.parent);
+    const parentName = parentItem && parentItem.name ? parentItem.name : '';
+    const parentLabel = parentName
+      ? `<b>${p.parent}</b> <span style="color:var(--fg-2)">${escapeHtml(parentName)}</span>`
+      : `<b>${p.parent}</b>`;
     if (p.cidr) {
       okCount++;
       const pi = cidrInfo(p.cidr);
@@ -1010,7 +1017,7 @@ function renderProposals() {
         <span class="icon">▸</span>
         <div>
           <div class="pcidr">${p.cidr}</div>
-          <div class="pmeta">in <b>${p.parent}</b> · ${fmtBytes(pi.size)} addrs · /${pi.prefix}</div>
+          <div class="pmeta">in ${parentLabel} · ${fmtBytes(pi.size)} addrs · /${pi.prefix}</div>
         </div>
         <span class="pill ok">fit</span>
       `;
@@ -1018,7 +1025,7 @@ function renderProposals() {
       row.innerHTML = `
         <span class="icon">✕</span>
         <div>
-          <div class="pcidr" style="color:var(--err);">${p.parent}</div>
+          <div class="pcidr" style="color:var(--err);">${parentLabel}</div>
           <div class="pmeta">${p.reason}</div>
         </div>
         <span class="pill err">no fit</span>
