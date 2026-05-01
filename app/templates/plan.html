@@ -139,6 +139,14 @@
       <h3>carve subnet</h3>
       <p class="hint">Run one query against <strong>multiple parents</strong> at once. Each gets its own first-free slot; commit applies them all.</p>
 
+      <div class="field" id="parentTagFilterField" style="display:none;">
+        <span class="lbl" style="display:flex; justify-content:space-between;">
+          <span>filter by tag</span>
+          <span style="text-transform:none; letter-spacing:0; color:var(--fg-3);">any of</span>
+        </span>
+        <div id="parentTagFilter" class="tag-chip-row"></div>
+      </div>
+
       <div class="field">
         <span class="lbl" style="display:flex; justify-content:space-between;">
           <span>parents</span>
@@ -150,7 +158,7 @@
         </span>
         <div id="parentPicker" class="parent-picker"></div>
         <div style="font-size:10px; font-family:'JetBrains Mono',monospace; color:var(--fg-3); margin-top:4px;">
-          <span id="parentCount">0</span> selected
+          <span id="parentCount">0</span> selected<span id="parentVisible"></span>
         </div>
       </div>
 

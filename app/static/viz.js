@@ -182,10 +182,11 @@ async function fetchPlan() {
 
 async function refresh() {
   await fetchPlan();
+  populateParentTagFilter();   // tag list depends on plan data
   populateParents();
   renderTree();
   renderViz();
-  renderProposals();   // STATE.proposals may have been cleared mid-flow
+  renderProposals();           // STATE.proposals may have been cleared mid-flow
   updateLegend();
   refreshBanners();
   updateBreadcrumbs();
@@ -750,16 +751,82 @@ function eligibleParents() {
   );
 }
 
+const SELECTED_PARENT_TAGS = new Set();
+
+// Apply the tag filter (OR semantics — show parents matching any selected tag).
+function filteredEligibleParents() {
+  const all = eligibleParents();
+  if (SELECTED_PARENT_TAGS.size === 0) return all;
+  return all.filter(it => (it.tags || []).some(t => SELECTED_PARENT_TAGS.has(t)));
+}
+
+function populateParentTagFilter() {
+  const filterEl = document.getElementById('parentTagFilter');
+  const fieldEl  = document.getElementById('parentTagFilterField');
+  // Collect every distinct tag across all eligible parents (not just visible).
+  const tags = new Set();
+  for (const it of eligibleParents()) for (const t of (it.tags || [])) tags.add(t);
+
+  if (tags.size === 0) {
+    fieldEl.style.display = 'none';
+    SELECTED_PARENT_TAGS.clear();
+    return;
+  }
+  // Drop selections for tags that no longer exist (e.g., after a delete).
+  for (const t of [...SELECTED_PARENT_TAGS]) if (!tags.has(t)) SELECTED_PARENT_TAGS.delete(t);
+
+  fieldEl.style.display = '';
+  filterEl.innerHTML = '';
+
+  for (const t of [...tags].sort((a, b) => a.localeCompare(b))) {
+    const chip = document.createElement('span');
+    chip.className = 'tag clickable' + (SELECTED_PARENT_TAGS.has(t) ? ' active' : '');
+    chip.textContent = t;
+    chip.addEventListener('click', () => {
+      if (SELECTED_PARENT_TAGS.has(t)) SELECTED_PARENT_TAGS.delete(t);
+      else SELECTED_PARENT_TAGS.add(t);
+      populateParentTagFilter();
+      populateParents();
+    });
+    filterEl.appendChild(chip);
+  }
+  if (SELECTED_PARENT_TAGS.size > 0) {
+    const clear = document.createElement('span');
+    clear.className = 'tag clickable clear';
+    clear.textContent = '× clear';
+    clear.addEventListener('click', () => {
+      SELECTED_PARENT_TAGS.clear();
+      populateParentTagFilter();
+      populateParents();
+    });
+    filterEl.appendChild(clear);
+  }
+}
+
 function populateParents() {
   const wrap = document.getElementById('parentPicker');
   wrap.innerHTML = '';
-  const items = eligibleParents();
-  for (const c of [...SELECTED_PARENTS]) if (!items.find(i=>i.cidr===c)) SELECTED_PARENTS.delete(c);
 
+  // Drop selections that are no longer eligible at all (regardless of filter).
+  // Filtered-out-but-still-eligible selections persist so toggling the filter
+  // doesn't silently deselect the user's choices.
+  const allEligibleCidrs = new Set(eligibleParents().map(i => i.cidr));
+  for (const c of [...SELECTED_PARENTS]) if (!allEligibleCidrs.has(c)) SELECTED_PARENTS.delete(c);
+
+  const items = filteredEligibleParents();
   for (const it of items) {
-    const totalFree = (it.free||[]).reduce((a,c)=>a+cidrInfo(c).size,0);
+    const totalFree = (it.free || []).reduce((a, c) => a + cidrInfo(c).size, 0);
     const row = document.createElement('div');
-    row.className = 'pp-row' + (it.kind==='supernet' ? ' is-supernet' : '') + (SELECTED_PARENTS.has(it.cidr) ? ' checked' : '');
+    row.className = 'pp-row'
+      + (it.kind === 'supernet' ? ' is-supernet' : '')
+      + (SELECTED_PARENTS.has(it.cidr) ? ' checked' : '');
+    // Native browser tooltip: full name, description (if any), and tag list.
+    const titleParts = [it.cidr];
+    if (it.name) titleParts.push('— ' + it.name);
+    let title = titleParts.join(' ');
+    if (it.description) title += '\n' + it.description;
+    if ((it.tags || []).length) title += '\nTags: ' + it.tags.join(', ');
+    row.title = title;
     row.innerHTML = `
       <span class="cb"></span>
       <span style="display:flex; min-width:0; align-items:center;">
@@ -779,7 +846,14 @@ function populateParents() {
   updateParentCount();
 }
 function updateParentCount() {
+  const total = eligibleParents().length;
+  const visible = filteredEligibleParents().length;
   document.getElementById('parentCount').textContent = SELECTED_PARENTS.size;
+  // Show "(3 of 12 visible)" only when filter is active.
+  const visibleEl = document.getElementById('parentVisible');
+  visibleEl.textContent = (SELECTED_PARENT_TAGS.size > 0)
+    ? ` · ${visible} of ${total} visible`
+    : '';
 }
 
 function proposeForParent(parentCidr, mode, value, repeat = 1) {
@@ -1140,8 +1214,10 @@ document.querySelectorAll('[data-add-kind]').forEach(b => {
   });
 });
 syncAddKindHint();
+// "all" / "supers" act on the *visible* (filter-respecting) list. "none"
+// always clears everything regardless of filter.
 document.getElementById('parentSelectAll').addEventListener('click', () => {
-  eligibleParents().forEach(i => SELECTED_PARENTS.add(i.cidr));
+  filteredEligibleParents().forEach(i => SELECTED_PARENTS.add(i.cidr));
   populateParents();
 });
 document.getElementById('parentSelectNone').addEventListener('click', () => {
@@ -1149,7 +1225,9 @@ document.getElementById('parentSelectNone').addEventListener('click', () => {
 });
 document.getElementById('parentSelectSupers').addEventListener('click', () => {
   SELECTED_PARENTS.clear();
-  eligibleParents().filter(i => i.kind==='supernet').forEach(i => SELECTED_PARENTS.add(i.cidr));
+  filteredEligibleParents()
+    .filter(i => i.kind === 'supernet')
+    .forEach(i => SELECTED_PARENTS.add(i.cidr));
   populateParents();
 });
 document.getElementById('carvePreviewBtn').addEventListener('click', () => runPreview());
