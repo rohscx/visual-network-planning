@@ -142,14 +142,17 @@
       <div class="field" id="parentTagFilterField" style="display:none;">
         <span class="lbl" style="display:flex; justify-content:space-between; align-items:center;">
           <span>filter by tag</span>
-          <span class="seg" id="parentTagMode" role="tablist"
-                style="text-transform:none; letter-spacing:0;"
-                title="Match any of the selected tags (OR) vs. require all of them (AND)">
-            <button type="button" data-tag-mode="any" aria-pressed="true"  style="padding:2px 8px; font-size:10px;">any</button>
-            <button type="button" data-tag-mode="all" aria-pressed="false" style="padding:2px 8px; font-size:10px;">all</button>
+          <span class="group-selector" id="parentTagGroupSelector"
+                title="Active group. Click chips to add to this group. Within a group: OR. Across groups: AND.">
+            <button type="button" data-group="A" aria-pressed="true">A</button>
+            <button type="button" data-group="B" aria-pressed="false">B</button>
+            <button type="button" data-group="C" aria-pressed="false">C</button>
           </span>
         </span>
         <div id="parentTagFilter" class="tag-chip-row"></div>
+        <div style="font-size:10px; color:var(--fg-3); margin-top:4px; font-family:'JetBrains Mono',monospace;">
+          OR within group · AND across groups
+        </div>
       </div>
 
       <div class="field">

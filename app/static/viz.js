@@ -751,22 +751,29 @@ function eligibleParents() {
   );
 }
 
-const SELECTED_PARENT_TAGS = new Set();
-let PARENT_TAG_MODE = 'any';   // 'any' = OR, 'all' = AND
+// tag-name -> group letter ('A' | 'B' | 'C'). Tags not in this map are
+// ignored by the filter (= chip is "off"). Within a group: OR.
+// Across groups: AND. Three groups covers env + AZ + one extra facet.
+const PARENT_TAG_GROUPS = new Map();
+let CURRENT_GROUP = 'A';
 
-// Apply the tag filter using the active mode.
+function tagsByGroup() {
+  const out = { A: [], B: [], C: [] };
+  for (const [tag, g] of PARENT_TAG_GROUPS) out[g].push(tag);
+  return out;
+}
+
 function filteredEligibleParents() {
   const all = eligibleParents();
-  if (SELECTED_PARENT_TAGS.size === 0) return all;
-  if (PARENT_TAG_MODE === 'all') {
-    const wanted = [...SELECTED_PARENT_TAGS];
-    return all.filter(it => {
-      const have = new Set(it.tags || []);
-      return wanted.every(t => have.has(t));
-    });
-  }
-  // 'any' (default): match parents carrying at least one selected tag.
-  return all.filter(it => (it.tags || []).some(t => SELECTED_PARENT_TAGS.has(t)));
+  if (PARENT_TAG_GROUPS.size === 0) return all;
+  const groups = tagsByGroup();
+  // Keep only non-empty groups; each must have at least one match (OR
+  // within a group). All non-empty groups must be satisfied (AND across).
+  const required = Object.values(groups).filter(g => g.length > 0);
+  return all.filter(it => {
+    const have = new Set(it.tags || []);
+    return required.every(g => g.some(t => have.has(t)));
+  });
 }
 
 function populateParentTagFilter() {
@@ -778,38 +785,52 @@ function populateParentTagFilter() {
 
   if (tags.size === 0) {
     fieldEl.style.display = 'none';
-    SELECTED_PARENT_TAGS.clear();
+    PARENT_TAG_GROUPS.clear();
     return;
   }
-  // Drop selections for tags that no longer exist (e.g., after a delete).
-  for (const t of [...SELECTED_PARENT_TAGS]) if (!tags.has(t)) SELECTED_PARENT_TAGS.delete(t);
+  // Drop assignments for tags that no longer exist (e.g., after a delete).
+  for (const t of [...PARENT_TAG_GROUPS.keys()]) if (!tags.has(t)) PARENT_TAG_GROUPS.delete(t);
 
   fieldEl.style.display = '';
   filterEl.innerHTML = '';
 
   for (const t of [...tags].sort((a, b) => a.localeCompare(b))) {
+    const grp = PARENT_TAG_GROUPS.get(t);
     const chip = document.createElement('span');
-    chip.className = 'tag clickable' + (SELECTED_PARENT_TAGS.has(t) ? ' active' : '');
-    chip.textContent = t;
+    chip.className = 'tag clickable' + (grp ? ` in-group-${grp.toLowerCase()}` : '');
+    chip.innerHTML = grp
+      ? `${escapeHtml(t)}<span class="gbadge">${grp}</span>`
+      : escapeHtml(t);
+    chip.title = grp
+      ? `In group ${grp}. Click to remove from group ${grp}, or switch the active group first to move it.`
+      : `Click to add to group ${CURRENT_GROUP}.`;
     chip.addEventListener('click', () => {
-      if (SELECTED_PARENT_TAGS.has(t)) SELECTED_PARENT_TAGS.delete(t);
-      else SELECTED_PARENT_TAGS.add(t);
+      const cur = PARENT_TAG_GROUPS.get(t);
+      if (cur === CURRENT_GROUP) {
+        PARENT_TAG_GROUPS.delete(t);                // already here → remove
+      } else {
+        PARENT_TAG_GROUPS.set(t, CURRENT_GROUP);    // assign or move into active group
+      }
       populateParentTagFilter();
       populateParents();
     });
     filterEl.appendChild(chip);
   }
-  if (SELECTED_PARENT_TAGS.size > 0) {
+  if (PARENT_TAG_GROUPS.size > 0) {
     const clear = document.createElement('span');
     clear.className = 'tag clickable clear';
     clear.textContent = '× clear';
     clear.addEventListener('click', () => {
-      SELECTED_PARENT_TAGS.clear();
+      PARENT_TAG_GROUPS.clear();
       populateParentTagFilter();
       populateParents();
     });
     filterEl.appendChild(clear);
   }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 }
 
 function populateParents() {
@@ -858,9 +879,9 @@ function updateParentCount() {
   const total = eligibleParents().length;
   const visible = filteredEligibleParents().length;
   document.getElementById('parentCount').textContent = SELECTED_PARENTS.size;
-  // Show "(3 of 12 visible)" only when filter is active.
+  // Show "· N of M visible" only when at least one chip is in some group.
   const visibleEl = document.getElementById('parentVisible');
-  visibleEl.textContent = (SELECTED_PARENT_TAGS.size > 0)
+  visibleEl.textContent = (PARENT_TAG_GROUPS.size > 0)
     ? ` · ${visible} of ${total} visible`
     : '';
 }
@@ -1223,15 +1244,18 @@ document.querySelectorAll('[data-add-kind]').forEach(b => {
   });
 });
 syncAddKindHint();
-// any/all toggle for the parent tag filter. Re-filters on every flip;
-// only relevant when at least one tag chip is active.
-document.querySelectorAll('#parentTagMode button').forEach(b => {
+// Group selector ([A] [B] [C]) sets which group new chip clicks land in.
+// Doesn't re-filter on its own — switching the active group is just
+// changing where future clicks go; the current assignments are unchanged.
+document.querySelectorAll('#parentTagGroupSelector button').forEach(b => {
   b.addEventListener('click', () => {
-    PARENT_TAG_MODE = b.dataset.tagMode;
-    document.querySelectorAll('#parentTagMode button').forEach(x =>
-      x.setAttribute('aria-pressed', x.dataset.tagMode === PARENT_TAG_MODE ? 'true' : 'false')
+    CURRENT_GROUP = b.dataset.group;
+    document.querySelectorAll('#parentTagGroupSelector button').forEach(x =>
+      x.setAttribute('aria-pressed', x.dataset.group === CURRENT_GROUP ? 'true' : 'false')
     );
-    populateParents();
+    // Refresh chip tooltips so the "click to add to group X" hint reflects
+    // the new active group; no actual filter change.
+    populateParentTagFilter();
   });
 });
 

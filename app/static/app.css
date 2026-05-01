@@ -600,6 +600,66 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .tag-chip-row .tag.clear:hover { color: var(--err); border-color: var(--err); }
 
+/* Group-aware filter: chips in groups A/B/C get colored borders + a tiny
+   letter badge so the user can see their assignment at a glance. */
+.tag-chip-row .tag .gbadge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 3px;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  background: var(--bg);
+  border-radius: 2px;
+}
+.tag-chip-row .tag.in-group-a {
+  border-color: var(--acc);
+  background: color-mix(in oklab, var(--acc), var(--bg-2) 78%);
+  color: var(--fg);
+}
+.tag-chip-row .tag.in-group-a .gbadge { color: var(--acc); }
+.tag-chip-row .tag.in-group-b {
+  border-color: var(--acc-2);
+  background: color-mix(in oklab, var(--acc-2), var(--bg-2) 78%);
+  color: var(--fg);
+}
+.tag-chip-row .tag.in-group-b .gbadge { color: var(--acc-2); }
+.tag-chip-row .tag.in-group-c {
+  border-color: var(--warn);
+  background: color-mix(in oklab, var(--warn), var(--bg-2) 78%);
+  color: var(--fg);
+}
+.tag-chip-row .tag.in-group-c .gbadge { color: var(--warn); }
+
+/* Group selector buttons next to the "filter by tag" label. */
+.group-selector {
+  display: inline-flex;
+  gap: 2px;
+}
+.group-selector button {
+  width: 20px; height: 20px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-2);
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.group-selector button:hover { color: var(--fg); border-color: var(--line-2); }
+.group-selector button[aria-pressed="true"][data-group="A"] {
+  background: var(--acc);    color: #0b0d10; border-color: var(--acc);
+}
+.group-selector button[aria-pressed="true"][data-group="B"] {
+  background: var(--acc-2);  color: #0b0d10; border-color: var(--acc-2);
+}
+.group-selector button[aria-pressed="true"][data-group="C"] {
+  background: var(--warn);   color: #0b0d10; border-color: var(--warn);
+}
+
 .proposal {
   display: grid;
   grid-template-columns: auto 1fr auto;
