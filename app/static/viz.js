@@ -753,16 +753,11 @@ function eligibleParents() {
 
 const SELECTED_PARENT_TAGS = new Set();
 
-// Apply the tag filter (AND semantics — a parent must carry every selected
-// tag to be visible; selecting more tags narrows progressively).
+// Apply the tag filter (OR semantics — show parents matching any selected tag).
 function filteredEligibleParents() {
   const all = eligibleParents();
   if (SELECTED_PARENT_TAGS.size === 0) return all;
-  const wanted = [...SELECTED_PARENT_TAGS];
-  return all.filter(it => {
-    const have = new Set(it.tags || []);
-    return wanted.every(t => have.has(t));
-  });
+  return all.filter(it => (it.tags || []).some(t => SELECTED_PARENT_TAGS.has(t)));
 }
 
 function populateParentTagFilter() {
