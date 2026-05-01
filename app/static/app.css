@@ -445,6 +445,18 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .tag.clickable { cursor: pointer; }
 .tag.clickable:hover { border-color: var(--acc); color: var(--fg); }
 
+/* Inherited tags appear in tooltips dimmed and dashed-bordered so the
+   user can tell them apart from a record's own tags at a glance. */
+.tag.inherited {
+  opacity: 0.7;
+  border-style: dashed;
+}
+.tag.inherited::before {
+  content: "↑ ";
+  opacity: 0.7;
+  font-size: 9px;
+}
+
 /* ---- Right rail: command panel ---- */
 .rail-tabs {
   display: grid;

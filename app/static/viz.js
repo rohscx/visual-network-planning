@@ -53,9 +53,15 @@ function buildTree(plan) {
         if (!parent || cand.size < parent.size) parent = cand;
       }
     }
-    if (parent) parent.children.push(it);
-    else if (it.kind === 'supernet') roots.push(it);
-    else { it.orphan = true; roots.push(it); }
+    if (parent) {
+      parent.children.push(it);
+      it._parent = parent;   // upward backref for tag inheritance lookups
+    } else if (it.kind === 'supernet') {
+      roots.push(it);
+    } else {
+      it.orphan = true;
+      roots.push(it);
+    }
   }
   for (const it of items) computeFree(it);
   for (const it of items) it.children.sort((a,b)=>a.start-b.start);
@@ -117,6 +123,26 @@ function usedAddresses(node) {
   let used = 0;
   for (const c of node.children) used += c.size;
   return used;
+}
+
+// A node's "effective" tags = its own tags + every ancestor's tags, with
+// duplicates removed. Order is innermost-first so the node's own tags win
+// when something downstream picks a "primary" tag (e.g. for viz coloring).
+function effectiveTags(node) {
+  const seen = new Set();
+  const out = [];
+  let n = node;
+  while (n) {
+    for (const t of (n.tags || [])) {
+      if (!seen.has(t)) { seen.add(t); out.push(t); }
+    }
+    n = n._parent;
+  }
+  return out;
+}
+function inheritedTags(node) {
+  const own = new Set(node.tags || []);
+  return effectiveTags(node).filter(t => !own.has(t));
 }
 
 //==========================================================
@@ -199,9 +225,11 @@ function norm(s) { return (s||'').toLowerCase(); }
 function nodeMatches(node, q) {
   if (!q) return { self: false, descendant: false };
   const ql = q.toLowerCase();
+  // Effective tags include inherited ones, so searching "prod" finds every
+  // child of a "prod"-tagged supernet, not just the supernet itself.
   const self = norm(node.cidr).includes(ql)
             || norm(node.name).includes(ql)
-            || (node.tags||[]).some(t => norm(t).includes(ql))
+            || effectiveTags(node).some(t => norm(t).includes(ql))
             || norm(node.description).includes(ql);
   let descendant = false;
   for (const c of (node.children||[])) {
@@ -212,7 +240,7 @@ function nodeMatches(node, q) {
 }
 function nodePassesTag(node, tag) {
   if (!tag) return true;
-  if ((node.tags||[]).includes(tag)) return true;
+  if (effectiveTags(node).includes(tag)) return true;
   return (node.children||[]).some(c => nodePassesTag(c, tag));
 }
 function highlightMatch(text, q) {
@@ -481,7 +509,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
 
   const fill = node.kind === 'supernet'    ? getCss('--supernet')
             : node.kind === 'reservation' ? getCss('--bg-3')
-            : STATE.colorMode === 'tag'   ? primaryTagColor(node.tags)
+            : STATE.colorMode === 'tag'   ? primaryTagColor(effectiveTags(node))
             : STATE.colorMode === 'util'  ? utilColor(node)
             :                               getCss('--used');
 
@@ -691,7 +719,16 @@ function bindHoverFree(el, p, parent) {
 function tooltipForNode(node) {
   const used = usedAddresses(node), total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
-  const tags = (node.tags||[]).map(t => `<span class="tag clickable" data-tag="${t}" title="Click to filter by ${t}"><span class="dot" style="background:${tagColor(t)}"></span>${t}</span>`).join('');
+  const ownSet = new Set(node.tags || []);
+  const ownChips = (node.tags || []).map(t =>
+    `<span class="tag clickable" data-tag="${t}" title="Click to filter by ${t}"><span class="dot" style="background:${tagColor(t)}"></span>${t}</span>`
+  ).join('');
+  const inheritedChips = inheritedTags(node).map(t =>
+    `<span class="tag clickable inherited" data-tag="${t}" title="Inherited from a parent · click to filter"><span class="dot" style="background:${tagColor(t)}"></span>${t}</span>`
+  ).join('');
+  const tagBlock = (ownChips || inheritedChips)
+    ? `<div class="tip-tags">${ownChips}${inheritedChips}</div>`
+    : '';
   const usedRow = node.kind === 'reservation'
     ? `<span class="k">status</span><span class="v" style="color:var(--warn)">reserved · excluded from carve</span>`
     : `<span class="k">used</span><span class="v">${fmtBytes(used)} (${pct}%)</span>`;
@@ -705,7 +742,7 @@ function tooltipForNode(node) {
       <span class="k">range</span><span class="v">${intToIp(node.start)} – ${intToIp(node.end - 1)}</span>
       ${node.description ? `<span class="k">desc</span><span class="v" style="text-align:right; color:var(--fg-2)">${node.description}</span>` : ''}
     </div>
-    ${tags ? `<div class="tip-tags">${tags}</div>` : ''}
+    ${tagBlock}
   `;
 }
 function tooltipForFree(p, parent) {
@@ -769,9 +806,12 @@ function filteredEligibleParents() {
   const groups = tagsByGroup();
   // Keep only non-empty groups; each must have at least one match (OR
   // within a group). All non-empty groups must be satisfied (AND across).
+  // Tag matching uses *effective* tags so a child inherits its parent's
+  // tags — e.g. an allocation under a supernet tagged "prod" is itself
+  // matched by group { "prod" }.
   const required = Object.values(groups).filter(g => g.length > 0);
   return all.filter(it => {
-    const have = new Set(it.tags || []);
+    const have = new Set(effectiveTags(it));
     return required.every(g => g.some(t => have.has(t)));
   });
 }
@@ -850,12 +890,16 @@ function populateParents() {
     row.className = 'pp-row'
       + (it.kind === 'supernet' ? ' is-supernet' : '')
       + (SELECTED_PARENTS.has(it.cidr) ? ' checked' : '');
-    // Native browser tooltip: full name, description (if any), and tag list.
+    // Native browser tooltip: full name, description (if any), and tag list
+    // — own tags first, then inherited tags marked with a "↑" prefix so the
+    // distinction is visible.
     const titleParts = [it.cidr];
     if (it.name) titleParts.push('— ' + it.name);
     let title = titleParts.join(' ');
     if (it.description) title += '\n' + it.description;
     if ((it.tags || []).length) title += '\nTags: ' + it.tags.join(', ');
+    const inh = inheritedTags(it);
+    if (inh.length) title += '\nInherited: ' + inh.join(', ');
     row.title = title;
     row.innerHTML = `
       <span class="cb"></span>
