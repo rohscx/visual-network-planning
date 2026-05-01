@@ -62,6 +62,14 @@ function buildTree(plan) {
   return { roots, items };
 }
 function computeFree(parent) {
+  // A leaf allocation or reservation is fully consumed by itself — its
+  // interior isn't "free space available for carving." Without this guard,
+  // computeFree would return [parent] which then gets drawn as a hatched
+  // is-free rect on top of the allocation's body, visually erasing it.
+  if (parent.kind !== 'supernet' && parent.children.length === 0) {
+    parent.free = [];
+    return;
+  }
   let ranges = [{start: parent.start, size: parent.size}];
   const kids = parent.children.slice().sort((a,b)=>a.start-b.start);
   for (const k of kids) {
