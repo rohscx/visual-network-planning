@@ -143,6 +143,7 @@ def plan_json(name: str):
         "name": plan.name,
         "supernets": [s.to_dict() for s in plan.supernets],
         "allocations": [a.to_dict() for a in plan.allocations],
+        "reservations": [r.to_dict() for r in plan.reservations],
         "tree": tree,
         "conflicts": [list(p) for p in conflicts],
         "orphans": orphans,
@@ -170,11 +171,13 @@ def _add_one(plan, *, kind: str, cidr: str, name: str, description: str, tags: l
     if not ok:
         return False, reason
     canonical = str(planning.parse(cidr))
-    alloc = Allocation(cidr=canonical, name=name, description=description, tags=tags)
+    rec = Allocation(cidr=canonical, name=name, description=description, tags=tags)
     if kind == "supernet":
-        plan.supernets.append(alloc)
+        plan.supernets.append(rec)
+    elif kind == "reservation":
+        plan.reservations.append(rec)
     else:
-        plan.allocations.append(alloc)
+        plan.allocations.append(rec)
     return True, ""
 
 
@@ -184,7 +187,7 @@ def add_record(name: str):
     description, tags (comma-separated string OR list)."""
     p = _params()
     kind = (p.get("kind") or "supernet").strip()
-    if kind not in ("supernet", "allocation"):
+    if kind not in ("supernet", "allocation", "reservation"):
         return jsonify(ok=False, error=f"unknown kind: {kind}"), 400
     return _add_kind(name, kind)
 
@@ -217,12 +220,14 @@ def add_allocation(name: str):
 
 @bp.post("/plans/<name>/edit")
 def edit_record(name: str):
-    """Update name/description/tags on an existing supernet or allocation."""
+    """Update name/description/tags on an existing supernet, allocation, or
+    reservation."""
     plan = _load_or_404(name)
     p = _params()
     cidr = (p.get("cidr") or "").strip()
-    rec = next((s for s in plan.supernets if s.cidr == cidr), None) \
-        or next((a for a in plan.allocations if a.cidr == cidr), None)
+    rec = (next((s for s in plan.supernets    if s.cidr == cidr), None)
+        or next((a for a in plan.allocations  if a.cidr == cidr), None)
+        or next((r for r in plan.reservations if r.cidr == cidr), None))
     if rec is None:
         return jsonify(ok=False, error=f"{cidr} not found"), 404
     rec.name = (p.get("name") or "").strip()
@@ -238,14 +243,15 @@ def delete_record(name: str):
     p = _params()
     cidr = (p.get("cidr") or "").strip()
     kind = p.get("kind", "allocation")
-    before_super = len(plan.supernets)
-    before_alloc = len(plan.allocations)
+    before = (len(plan.supernets), len(plan.allocations), len(plan.reservations))
     if kind == "supernet":
         plan.supernets = [s for s in plan.supernets if s.cidr != cidr]
+    elif kind == "reservation":
+        plan.reservations = [r for r in plan.reservations if r.cidr != cidr]
     else:
         plan.allocations = [a for a in plan.allocations if a.cidr != cidr]
-    if (len(plan.supernets) == before_super
-            and len(plan.allocations) == before_alloc):
+    after = (len(plan.supernets), len(plan.allocations), len(plan.reservations))
+    if before == after:
         return jsonify(ok=False, error=f"{cidr} not found"), 404
     storage.save_plan(_plans_dir(), plan)
     return jsonify(ok=True)

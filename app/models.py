@@ -29,12 +29,14 @@ class Plan:
     name: str
     supernets: list[Allocation] = field(default_factory=list)
     allocations: list[Allocation] = field(default_factory=list)
+    reservations: list[Allocation] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "supernets": [s.to_dict() for s in self.supernets],
             "allocations": [a.to_dict() for a in self.allocations],
+            "reservations": [r.to_dict() for r in self.reservations],
         }
 
     @classmethod
@@ -43,4 +45,5 @@ class Plan:
             name=data["name"],
             supernets=[Allocation.from_dict(s) for s in data.get("supernets", [])],
             allocations=[Allocation.from_dict(a) for a in data.get("allocations", [])],
+            reservations=[Allocation.from_dict(r) for r in data.get("reservations", [])],
         )

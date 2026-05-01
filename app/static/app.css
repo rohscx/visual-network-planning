@@ -373,6 +373,23 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .viz-block.conflict rect.body { stroke: var(--err); stroke-width: 2; }
 
+/* ---- Reserved blocks (excluded from carving) ---- */
+.viz-block.is-reservation rect.body {
+  fill: var(--bg-3);
+  stroke: var(--warn);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+}
+.viz-block.is-reservation:hover rect.body { fill: var(--bg-2); }
+.viz-block.is-reservation text { fill: var(--warn); }
+
+.node.is-reservation .cidr { color: var(--warn); }
+.node.is-reservation .pct {
+  color: var(--warn);
+  border-color: color-mix(in oklab, var(--warn), transparent 70%);
+}
+.detail-kind.kind-reservation { color: var(--warn); border-color: color-mix(in oklab, var(--warn), transparent 60%); }
+
 /* ---- Tooltip ---- */
 .tooltip {
   position: fixed;

@@ -12,6 +12,7 @@
   <span class="current">{{ plan_name }}</span>
   <span class="badge" id="badgeSupers">– supernets</span>
   <span class="badge" id="badgeAllocs">– allocs</span>
+  <span class="badge" id="badgeReserved" style="display:none; color:var(--warn);">– reserved</span>
   <span class="badge" id="badgeUtil">– util</span>
 {% endblock %}
 
@@ -61,6 +62,7 @@
     <div class="meta-row"><span class="k">plan</span><span class="v">{{ plan_name }}</span></div>
     <div class="meta-row"><span class="k">space</span><span class="v" id="metaSpace">—</span></div>
     <div class="meta-row"><span class="k">utilization</span><span class="v acc" id="metaUtil">—</span></div>
+    <div class="meta-row"><span class="k">reservations</span><span class="v" id="metaReserved">0</span></div>
     <div class="meta-row"><span class="k">conflicts</span><span class="v" id="metaConflicts">0</span></div>
     <div class="tree" id="tree"></div>
   </aside>
@@ -110,10 +112,12 @@
       <div class="field">
         <span class="lbl">type</span>
         <div class="seg" style="width:100%" id="addKind">
-          <button data-add-kind="supernet"   aria-pressed="true"  style="flex:1">supernet</button>
-          <button data-add-kind="allocation" aria-pressed="false" style="flex:1">allocation</button>
+          <button data-add-kind="supernet"    aria-pressed="true"  style="flex:1">supernet</button>
+          <button data-add-kind="allocation"  aria-pressed="false" style="flex:1">allocation</button>
+          <button data-add-kind="reservation" aria-pressed="false" style="flex:1">reservation</button>
         </div>
       </div>
+      <p class="hint" id="addKindHint" style="margin: -2px 0 8px;"></p>
       <div class="field"><span class="lbl">cidr</span>
         <input type="text" placeholder="10.0.0.0/16" id="addCidr"></div>
       <div class="row2">

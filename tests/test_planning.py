@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import pytest
 
-from app.models import Allocation, Plan
+from app.models import Allocation, Plan  # noqa: F401
 from app.planning import (
     build_tree, carve, find_conflicts, find_orphans, free_space,
     parse_strict, validate_new_allocation,
 )
 
 
-def _plan(supernets=(), allocations=()):
+def _plan(supernets=(), allocations=(), reservations=()):
     return Plan(
         name="t",
         supernets=[Allocation(cidr=c, name=n) for c, n in supernets],
         allocations=[Allocation(cidr=c, name=n) for c, n in allocations],
+        reservations=[Allocation(cidr=c, name=n) for c, n in reservations],
     )
 
 
@@ -204,3 +205,100 @@ def test_carve_requires_exactly_one_mode():
         carve("10.0.0.0/16", [], prefix_length=24, host_count=500)
     with pytest.raises(ValueError):
         carve("10.0.0.0/16", [])
+
+
+# --- reservations ------------------------------------------------------------
+
+def test_reservation_blocks_carve_into_its_range():
+    # Reserved 10.0.0.0/24 inside the supernet -> first /24 carve must skip it.
+    existing = ["10.0.0.0/16", "10.0.0.0/24"]  # /24 is reserved
+    got = carve("10.0.0.0/16", existing, prefix_length=24)
+    assert got == ["10.0.1.0/24"]
+
+
+def test_reservation_appears_in_tree_with_kind():
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "top")],
+        reservations=[("10.0.0.0/24", "gateway-pool")],
+    )
+    tree = build_tree(plan)
+    root = tree["roots"][0]
+    assert len(root["children"]) == 1
+    child = root["children"][0]
+    assert child["cidr"] == "10.0.0.0/24"
+    assert child["kind"] == "reservation"
+    assert child["is_reservation"] is True
+    assert child["is_supernet"] is False
+
+
+def test_reservation_subtracts_from_parent_free_space():
+    plan = _plan(
+        supernets=[("10.0.0.0/24", "top")],
+        reservations=[("10.0.0.0/25", "pool")],
+    )
+    tree = build_tree(plan)
+    free = tree["roots"][0]["free"]
+    assert "10.0.0.128/25" in free
+    assert "10.0.0.0/25" not in free
+
+
+def test_reservation_overlapping_allocation_is_a_conflict():
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "")],
+        allocations=[("10.0.0.0/24", "alloc")],
+        reservations=[("10.0.0.0/24", "resv")],   # exact same CIDR — conflict
+    )
+    conflicts = find_conflicts(plan)
+    assert len(conflicts) >= 1
+
+
+def test_validate_rejects_duplicate_reservation():
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "")],
+        reservations=[("10.0.0.0/24", "resv")],
+    )
+    ok, reason = validate_new_allocation(plan, "10.0.0.0/24")
+    assert not ok
+    assert "reservation" in reason.lower() or "duplicate" in reason.lower()
+
+
+def test_validate_blocks_allocation_overlapping_reservation():
+    # Allocation that exactly equals a reservation should be rejected as dup.
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "")],
+        reservations=[("10.0.0.0/24", "")],
+    )
+    ok, _ = validate_new_allocation(plan, "10.0.0.0/24")
+    assert not ok
+
+
+def test_orphan_detection_includes_reservations():
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "")],
+        reservations=[("192.168.0.0/24", "stray-reservation")],
+    )
+    assert "192.168.0.0/24" in find_orphans(plan)
+
+
+def test_plan_round_trip_preserves_reservations():
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "top")],
+        allocations=[("10.0.1.0/24", "prod")],
+        reservations=[("10.0.0.0/24", "gateway")],
+    )
+    restored = Plan.from_dict(plan.to_dict())
+    assert len(restored.reservations) == 1
+    assert restored.reservations[0].cidr == "10.0.0.0/24"
+    assert restored.reservations[0].name == "gateway"
+
+
+def test_legacy_plan_without_reservations_field_still_loads():
+    # A plan file written before reservations existed must still deserialize.
+    legacy = {
+        "name": "old",
+        "supernets":   [{"cidr": "10.0.0.0/16", "name": ""}],
+        "allocations": [{"cidr": "10.0.1.0/24", "name": ""}],
+        # no "reservations" key
+    }
+    plan = Plan.from_dict(legacy)
+    assert plan.reservations == []

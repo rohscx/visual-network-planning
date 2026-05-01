@@ -72,16 +72,19 @@ def build_tree(plan: Plan) -> dict:
     Each node:
         {
             "cidr", "name", "description", "tags",
-            "is_supernet": bool,
+            "kind": "supernet" | "allocation" | "reservation",
+            "is_supernet": bool,        # legacy alias for kind == "supernet"
+            "is_reservation": bool,     # convenience alias for kind == "reservation"
             "children": [node, ...],
             "free": [cidr_str, ...],   # free ranges directly under this node
             "total_addresses": int,
-            "used_addresses": int,     # sum of direct children
+            "used_addresses": int,     # sum of direct children (incl. reservations)
         }
     """
-    supernets = [(s, parse(s.cidr), True) for s in plan.supernets]
-    allocs = [(a, parse(a.cidr), False) for a in plan.allocations]
-    all_nodes = supernets + allocs
+    supernets = [(s, parse(s.cidr), "supernet") for s in plan.supernets]
+    allocs = [(a, parse(a.cidr), "allocation") for a in plan.allocations]
+    reservs = [(r, parse(r.cidr), "reservation") for r in plan.reservations]
+    all_nodes = supernets + allocs + reservs
 
     parent_of: list[int | None] = [None] * len(all_nodes)
     for i, (_, net_i, _) in enumerate(all_nodes):
@@ -102,7 +105,7 @@ def build_tree(plan: Plan) -> dict:
             children_of[p].append(i)
 
     def make_node(i: int) -> dict:
-        alloc, net, is_super = all_nodes[i]
+        rec, net, kind = all_nodes[i]
         direct_nets = [all_nodes[c][1] for c in children_of[i]]
         children = sorted(
             (make_node(c) for c in children_of[i]),
@@ -112,10 +115,12 @@ def build_tree(plan: Plan) -> dict:
         used_addresses = sum(c.num_addresses for c in direct_nets)
         return {
             "cidr": str(net),
-            "name": alloc.name,
-            "description": alloc.description,
-            "tags": list(alloc.tags),
-            "is_supernet": is_super,
+            "name": rec.name,
+            "description": rec.description,
+            "tags": list(rec.tags),
+            "kind": kind,
+            "is_supernet": kind == "supernet",
+            "is_reservation": kind == "reservation",
             "children": children,
             "free": [str(f) for f in free],
             "total_addresses": net.num_addresses,
@@ -124,23 +129,29 @@ def build_tree(plan: Plan) -> dict:
 
     roots = [
         make_node(i)
-        for i, (_, _, is_super) in enumerate(all_nodes)
-        if is_super and parent_of[i] is None
+        for i, (_, _, kind) in enumerate(all_nodes)
+        if kind == "supernet" and parent_of[i] is None
     ]
     roots.sort(key=lambda n: (int(parse(n["cidr"]).network_address), parse(n["cidr"]).prefixlen))
 
     orphans = [
         all_nodes[i][0].to_dict()
-        for i, (_, _, is_super) in enumerate(all_nodes)
-        if not is_super and parent_of[i] is None
+        for i, (_, _, kind) in enumerate(all_nodes)
+        if kind != "supernet" and parent_of[i] is None
     ]
     return {"roots": roots, "orphans": orphans}
 
 
+def _all_owned_pairs(plan: Plan):
+    """All (cidr, parsed) pairs the plan tracks, regardless of kind."""
+    return ([(s.cidr, parse(s.cidr)) for s in plan.supernets]
+            + [(a.cidr, parse(a.cidr)) for a in plan.allocations]
+            + [(r.cidr, parse(r.cidr)) for r in plan.reservations])
+
+
 def find_conflicts(plan: Plan) -> list[tuple[str, str]]:
     """Pairs of CIDRs that partially overlap (neither is subnet_of the other)."""
-    items = [(s.cidr, parse(s.cidr)) for s in plan.supernets] + \
-            [(a.cidr, parse(a.cidr)) for a in plan.allocations]
+    items = _all_owned_pairs(plan)
     out: list[tuple[str, str]] = []
     for i in range(len(items)):
         for j in range(i + 1, len(items)):
@@ -154,11 +165,13 @@ def find_conflicts(plan: Plan) -> list[tuple[str, str]]:
 
 
 def find_orphans(plan: Plan) -> list[str]:
+    """Allocations or reservations not contained in any supernet."""
     supers = [parse(s.cidr) for s in plan.supernets]
-    return [
-        a.cidr for a in plan.allocations
-        if not any(parse(a.cidr).subnet_of(s) for s in supers)
-    ]
+    out: list[str] = []
+    for rec in (*plan.allocations, *plan.reservations):
+        if not any(parse(rec.cidr).subnet_of(s) for s in supers):
+            out.append(rec.cidr)
+    return out
 
 
 def carve(
@@ -222,7 +235,12 @@ def carve(
 
 
 def validate_new_allocation(plan: Plan, new_cidr: str) -> tuple[bool, str]:
-    """Reject partial overlaps and exact duplicates; allow strict containment."""
+    """Reject partial overlaps and exact duplicates; allow strict containment.
+
+    Checks against supernets, allocations, AND reservations — a new entry that
+    duplicates or partially overlaps any existing entry of any kind is
+    rejected.
+    """
     try:
         new_net = parse(new_cidr)
     except ValueError as e:
@@ -239,4 +257,10 @@ def validate_new_allocation(plan: Plan, new_cidr: str) -> tuple[bool, str]:
             return False, f"Duplicate of existing allocation {a.cidr}"
         if new_net.overlaps(an) and not new_net.subnet_of(an) and not an.subnet_of(new_net):
             return False, f"Partial overlap with allocation {a.cidr}"
+    for r in plan.reservations:
+        rn = parse(r.cidr)
+        if rn == new_net:
+            return False, f"Duplicate of existing reservation {r.cidr}"
+        if new_net.overlaps(rn) and not new_net.subnet_of(rn) and not rn.subnet_of(new_net):
+            return False, f"Partial overlap with reservation {r.cidr}"
     return True, ""

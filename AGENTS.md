@@ -59,6 +59,24 @@ makes the unit tests fast and honest — keep it that way.
 - Duplicate detection (two entries with the same CIDR) *is* a real runtime
   case and must stay covered.
 
+## Three entry types
+
+A plan tracks three flat lists of `Allocation` records:
+
+- **`supernets`** — top-level blocks the engineer owns. Roots of the tree.
+- **`allocations`** — existing or newly-carved subnets. Children of supernets.
+- **`reservations`** — ranges held off-limits. Treated like allocations for
+  containment, conflict, and free-space purposes (they consume space), but
+  the carve algorithm never lands inside one because reservations are
+  filtered out of `eligibleParents()` in the frontend and they show up in
+  the `used` set passed to `_free_space()` on the backend. Visually
+  distinguished by a dashed warn-color border.
+
+When adding logic that iterates "everything in the plan," use
+`planning._all_owned_pairs(plan)` to get all three kinds at once — don't
+write a new `supernets + allocations` chain that silently skips
+reservations.
+
 ## Carve modes
 
 `planning.carve()` accepts exactly one of:

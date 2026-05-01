@@ -42,9 +42,16 @@ Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>t</kbd> theme ·
   **repeat** count; preview the proposed CIDRs as dashed-mint overlays
   in the viz, then commit them all atomically. Name template supports
   `{parent}` and `{n}` (e.g. `{parent}.elb-{n}`, `{n}` resets per parent).
+- **Reservations** — a third entry type alongside supernet/allocation. A
+  reservation consumes free space (so future carves skip it) but is **never
+  carved into itself**. Use it for ranges you want to keep off-limits —
+  gateway pools, future expansion, "don't touch this." Reservations render
+  in the viz with a dashed warn-color border and don't appear in the
+  carve-parent picker.
 - **Conflict detection** — duplicates and misaligned CIDRs are rejected.
-  Allocations that don't sit inside any supernet are flagged as orphans.
-  Conflicts and orphans surface as click-to-jump banners.
+  Allocations or reservations that don't sit inside any supernet are
+  flagged as orphans. Conflicts and orphans surface as click-to-jump
+  banners.
 - **Visualization** — nested-rectangle view of each supernet, colored by
   used·free / by tag / by utilization gradient. Hover any block for a
   detail tooltip; click a free slot to pre-fill the carve form;

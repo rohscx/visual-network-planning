@@ -38,8 +38,9 @@ function fmtBytes(n) {
 //==========================================================
 function buildTree(plan) {
   const items = [
-    ...(plan.supernets   || []).map(s => ({...s, kind:'supernet'})),
-    ...(plan.allocations || []).map(a => ({...a, kind:'allocation'})),
+    ...(plan.supernets    || []).map(s => ({...s, kind:'supernet'})),
+    ...(plan.allocations  || []).map(a => ({...a, kind:'allocation'})),
+    ...(plan.reservations || []).map(r => ({...r, kind:'reservation'})),
   ].map(x => ({ ...x, ...cidrInfo(x.cidr), children: [], free: [] }));
   items.sort((a,b) => a.size === b.size ? a.start - b.start : b.size - a.size);
 
@@ -134,7 +135,7 @@ function getCss(v) { return getComputedStyle(document.documentElement).getProper
 //==========================================================
 //  State + server fetch
 //==========================================================
-let PLAN = { name: PLAN_NAME, supernets: [], allocations: [] };
+let PLAN = { name: PLAN_NAME, supernets: [], allocations: [], reservations: [] };
 let SERVER = { conflicts: [], orphans: [] };
 let TREE = { roots: [], items: [] };
 const STATE = {
@@ -155,7 +156,12 @@ async function fetchPlan() {
     const r = await fetch(URL_PLAN, { headers: { 'Accept': 'application/json' } });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
-    PLAN = { name: data.name, supernets: data.supernets, allocations: data.allocations };
+    PLAN = {
+      name: data.name,
+      supernets: data.supernets || [],
+      allocations: data.allocations || [],
+      reservations: data.reservations || [],
+    };
     SERVER = { conflicts: data.conflicts || [], orphans: data.orphans || [] };
     TREE = buildTree(PLAN);
   } catch (e) {
@@ -254,7 +260,9 @@ function renderTree() {
 function countNodes(n) { return 1 + (n.children||[]).reduce((a,c)=>a+countNodes(c),0); }
 function renderNode(node, isRoot) {
   const el = document.createElement('div');
-  el.className = 'node' + (node.kind==='supernet' ? ' is-supernet' : '');
+  el.className = 'node'
+    + (node.kind === 'supernet'    ? ' is-supernet'    : '')
+    + (node.kind === 'reservation' ? ' is-reservation' : '');
   el.dataset.cidr = node.cidr;
   el.dataset.collapsed = 'false';
   el.dataset.leaf = node.children.length === 0 && (node.free||[]).length === 0 ? 'true' : 'false';
@@ -269,6 +277,7 @@ function renderNode(node, isRoot) {
   const used = usedAddresses(node);
   const total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
+  const pctLabel = node.kind === 'reservation' ? 'reserved' : `${pct}%`;
 
   const row = document.createElement('div');
   row.className = 'row';
@@ -283,7 +292,7 @@ function renderNode(node, isRoot) {
     <span class="actions-tn">
       <button data-act="del" title="Delete">×</button>
     </span>
-    <span class="pct">${pct}%</span>
+    <span class="pct">${pctLabel}</span>
   `;
   row.addEventListener('click', (e) => {
     if (e.target.closest('.twist')) {
@@ -433,17 +442,19 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
                    || (STATE.search && !(nodeMatches(node, STATE.search).self || nodeMatches(node, STATE.search).descendant));
   const inConflict = SERVER.conflicts.some(([a,b]) => a === node.cidr || b === node.cidr);
   const g = svg.append('g').attr('class', 'viz-block' +
-    (node.kind === 'supernet' ? ' is-supernet' : '') +
+    (node.kind === 'supernet'    ? ' is-supernet'    : '') +
+    (node.kind === 'reservation' ? ' is-reservation' : '') +
     (STATE.selectedCidr === node.cidr ? ' selected' : '') +
     (inConflict ? ' conflict' : '') +
     (dimByFilter ? ' dim' :
      (STATE.selectedCidr && STATE.selectedCidr !== node.cidr && !isSubnetOf(node.cidr, STATE.selectedCidr) && !isSubnetOf(STATE.selectedCidr, node.cidr) ? ' dim' : '')));
   g.attr('data-cidr', node.cidr);
 
-  const fill = node.kind === 'supernet' ? getCss('--supernet')
-            : STATE.colorMode === 'tag'  ? primaryTagColor(node.tags)
-            : STATE.colorMode === 'util' ? utilColor(node)
-            :                              getCss('--used');
+  const fill = node.kind === 'supernet'    ? getCss('--supernet')
+            : node.kind === 'reservation' ? getCss('--bg-3')
+            : STATE.colorMode === 'tag'   ? primaryTagColor(node.tags)
+            : STATE.colorMode === 'util'  ? utilColor(node)
+            :                               getCss('--used');
 
   g.append('rect')
     .attr('class', 'body')
@@ -624,13 +635,16 @@ function tooltipForNode(node) {
   const used = usedAddresses(node), total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
   const tags = (node.tags||[]).map(t => `<span class="tag clickable" data-tag="${t}" title="Click to filter by ${t}"><span class="dot" style="background:${tagColor(t)}"></span>${t}</span>`).join('');
+  const usedRow = node.kind === 'reservation'
+    ? `<span class="k">status</span><span class="v" style="color:var(--warn)">reserved · excluded from carve</span>`
+    : `<span class="k">used</span><span class="v">${fmtBytes(used)} (${pct}%)</span>`;
   return `
-    <div class="tip-cidr">${node.cidr}</div>
+    <div class="tip-cidr"${node.kind==='reservation' ? ' style="color:var(--warn)"' : ''}>${node.cidr}</div>
     <div class="tip-name">${node.name || '<i style="color:var(--fg-3)">unnamed</i>'}</div>
     <div class="tip-grid">
-      <span class="k">type</span><span class="v">${node.kind === 'supernet' ? 'supernet' : 'allocation'}</span>
+      <span class="k">type</span><span class="v">${node.kind}</span>
       <span class="k">size</span><span class="v">${fmtBytes(total)} addrs (/${node.prefix})</span>
-      <span class="k">used</span><span class="v">${fmtBytes(used)} (${pct}%)</span>
+      ${usedRow}
       <span class="k">range</span><span class="v">${intToIp(node.start)} – ${intToIp(node.end - 1)}</span>
       ${node.description ? `<span class="k">desc</span><span class="v" style="text-align:right; color:var(--fg-2)">${node.description}</span>` : ''}
     </div>
@@ -671,9 +685,12 @@ function hideTooltip() { tooltip.classList.remove('on'); }
 //  Carve: multi-parent preview + commit
 //==========================================================
 function eligibleParents() {
+  // Reservations are explicitly excluded from carving — that's the whole point.
   return TREE.items.filter(i =>
-    (i.kind === 'supernet' || i.children.length > 0) && (i.free || []).length > 0
-    || (i.kind === 'supernet' && i.children.length === 0)
+    i.kind !== 'reservation' && (
+      ((i.kind === 'supernet' || i.children.length > 0) && (i.free || []).length > 0)
+      || (i.kind === 'supernet' && i.children.length === 0)
+    )
   );
 }
 
@@ -885,12 +902,12 @@ function resetAdd() {
 
 async function requestDelete(cidr) {
   const node = nodeOf(cidr); if (!node) return;
-  const what = node.kind === 'supernet' ? 'supernet' : 'allocation';
+  const what = node.kind;  // 'supernet' | 'allocation' | 'reservation'
   const childWarning = node.children.length
-    ? `\n\nThis contains ${node.children.length} child allocation${node.children.length>1?'s':''} which will become orphans.`
+    ? `\n\nThis contains ${node.children.length} child item${node.children.length>1?'s':''} which will become orphans.`
     : '';
   if (!confirm(`Delete ${what} ${cidr}${node.name ? ' (' + node.name + ')' : ''}?${childWarning}`)) return;
-  const { ok, data } = await postJSON(URL_DELETE, { cidr, kind: node.kind === 'supernet' ? 'supernet' : 'allocation' });
+  const { ok, data } = await postJSON(URL_DELETE, { cidr, kind: what });
   if (!ok) { toast(data.error || 'delete failed', 'err'); return; }
   if (STATE.selectedCidr === cidr) STATE.selectedCidr = null;
   toast(`deleted ${cidr}`, 'ok');
@@ -907,8 +924,10 @@ function openDetail(cidr) {
   STATE.detailCidr = cidr;
   const used = usedAddresses(node), total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
-  document.getElementById('detailKind').textContent = node.kind === 'supernet' ? 'supernet detail' : 'allocation detail';
-  document.getElementById('detailKindBadge').textContent = node.kind;
+  document.getElementById('detailKind').textContent = `${node.kind} detail`;
+  const kindBadge = document.getElementById('detailKindBadge');
+  kindBadge.textContent = node.kind;
+  kindBadge.className = 'detail-kind' + (node.kind === 'reservation' ? ' kind-reservation' : '');
   const detailCidrEl = document.getElementById('detailCidr');
   detailCidrEl.textContent = node.cidr;
   detailCidrEl.dataset.copy = node.cidr;
@@ -916,7 +935,11 @@ function openDetail(cidr) {
   document.getElementById('detailRange').textContent = `${intToIp(node.start)} – ${intToIp(node.end-1)}`;
   const par = parentOf(cidr);
   document.getElementById('detailParent').textContent = par ? par.cidr : '—';
-  document.getElementById('detailUtil').textContent = node.kind === 'supernet' ? `${pct}%` : (node.children.length ? `${pct}%` : 'leaf');
+  document.getElementById('detailUtil').textContent =
+    node.kind === 'reservation' ? 'reserved' :
+    node.kind === 'supernet'    ? `${pct}%` :
+    node.children.length        ? `${pct}%` :
+                                  'leaf';
   document.getElementById('detailName').value = node.name || '';
   document.getElementById('detailDesc').value = node.description || '';
   document.getElementById('detailTags').value = (node.tags||[]).join(', ');
@@ -976,8 +999,9 @@ function refreshBanners() {
 //  Breadcrumbs / sidebar meta
 //==========================================================
 function updateBreadcrumbs() {
-  const nSuper = (PLAN.supernets || []).length;
-  const nAlloc = (PLAN.allocations || []).length;
+  const nSuper = (PLAN.supernets    || []).length;
+  const nAlloc = (PLAN.allocations  || []).length;
+  const nResv  = (PLAN.reservations || []).length;
   let totalAddrs = 0, usedAddrs = 0;
   for (const r of TREE.roots.filter(x=>x.kind==='supernet')) {
     totalAddrs += r.size;
@@ -986,10 +1010,18 @@ function updateBreadcrumbs() {
   const pct = totalAddrs ? Math.round(1000 * usedAddrs / totalAddrs) / 10 : 0;
   document.getElementById('badgeSupers').textContent = `${nSuper} supernet${nSuper===1?'':'s'}`;
   document.getElementById('badgeAllocs').textContent = `${nAlloc} alloc${nAlloc===1?'':'s'}`;
+  const reservedBadge = document.getElementById('badgeReserved');
+  if (nResv > 0) {
+    reservedBadge.style.display = '';
+    reservedBadge.textContent = `${nResv} reserved`;
+  } else {
+    reservedBadge.style.display = 'none';
+  }
   document.getElementById('badgeUtil').textContent = `${pct}% util`;
   const supers = (PLAN.supernets || []).map(s => s.cidr);
-  document.getElementById('metaSpace').textContent = supers.length ? supers.slice(0,2).join(', ') + (supers.length>2 ? ` +${supers.length-2}` : '') : '—';
-  document.getElementById('metaUtil').textContent  = totalAddrs ? `${pct}%` : '—';
+  document.getElementById('metaSpace').textContent    = supers.length ? supers.slice(0,2).join(', ') + (supers.length>2 ? ` +${supers.length-2}` : '') : '—';
+  document.getElementById('metaUtil').textContent     = totalAddrs ? `${pct}%` : '—';
+  document.getElementById('metaReserved').textContent = String(nResv);
 }
 
 //==========================================================
@@ -1034,12 +1066,24 @@ document.querySelectorAll('#carveMode button').forEach(b => {
     document.getElementById('carveValue').value = mode === 'prefix' ? 28 : mode === 'hosts' ? 100 : 4;
   });
 });
+const ADD_KIND_HINTS = {
+  supernet:    'A top-level block you own. Roots the hierarchy.',
+  allocation:  'An existing subnet seen in the wild — consumes free space.',
+  reservation: 'A range to keep off-limits — consumes free space, but never carved into.',
+};
+function syncAddKindHint() {
+  const k = document.querySelector('[data-add-kind][aria-pressed="true"]')?.dataset.addKind || 'supernet';
+  const el = document.getElementById('addKindHint');
+  if (el) el.textContent = ADD_KIND_HINTS[k] || '';
+}
 document.querySelectorAll('[data-add-kind]').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('[data-add-kind]').forEach(x => x.setAttribute('aria-pressed','false'));
     b.setAttribute('aria-pressed','true');
+    syncAddKindHint();
   });
 });
+syncAddKindHint();
 document.getElementById('parentSelectAll').addEventListener('click', () => {
   eligibleParents().forEach(i => SELECTED_PARENTS.add(i.cidr));
   populateParents();
