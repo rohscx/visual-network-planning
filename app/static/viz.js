@@ -244,6 +244,20 @@ function parentOf(cidr) {
   return null;
 }
 
+// Hovering a tree row should glow the matching viz block. Listeners go on
+// `.row` (not the outer `.node`) so a child row's hover doesn't keep its
+// parent highlighted.
+function bindTreeHoverHighlight(rowEl, cidr) {
+  rowEl.addEventListener('mouseenter', () => {
+    const block = document.querySelector(`#viz [data-cidr="${CSS.escape(cidr)}"]`);
+    if (block) block.classList.add('hover');
+  });
+  rowEl.addEventListener('mouseleave', () => {
+    const block = document.querySelector(`#viz [data-cidr="${CSS.escape(cidr)}"]`);
+    if (block) block.classList.remove('hover');
+  });
+}
+
 //==========================================================
 //  Render tree (sidebar)
 //==========================================================
@@ -313,6 +327,7 @@ function renderNode(node, isRoot) {
     selectCidr(node.cidr);
     openDetail(node.cidr);
   });
+  bindTreeHoverHighlight(row, node.cidr);
   el.appendChild(row);
 
   if (node.children.length || (node.free||[]).length) {
@@ -341,6 +356,7 @@ function renderNode(node, isRoot) {
         document.getElementById('carveValue').value = fi.prefix + 1;
         runPreview(f, node.cidr);
       });
+      bindTreeHoverHighlight(fe.querySelector('.row'), f);
       kids.appendChild(fe);
     }
     el.appendChild(kids);

@@ -343,7 +343,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .viz-block { cursor: pointer; }
 .viz-block rect { transition: filter .12s ease, stroke-width .12s ease; }
-.viz-block.hover > rect.body { filter: brightness(1.18); }
+.viz-block.hover > rect.body { filter: brightness(1.22); stroke: var(--acc); stroke-width: 1.5; }
 .viz-block.selected > rect.body { stroke: var(--acc); stroke-width: 2; }
 .viz-block.dim > rect.body { opacity: 0.35; }
 .viz-block text {
@@ -359,7 +359,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   stroke-width: 1;
   stroke-dasharray: 3 2;
 }
-.viz-block.is-free:hover rect.body { fill: var(--free-2); stroke: var(--acc); stroke-dasharray: none; }
+.viz-block.is-free:hover rect.body,
+.viz-block.is-free.hover rect.body { fill: var(--free-2); stroke: var(--acc); stroke-dasharray: none; }
 .viz-block.proposed rect.body {
   fill: none !important;
   stroke: var(--acc);
@@ -380,7 +381,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   stroke-width: 1.5;
   stroke-dasharray: 5 3;
 }
-.viz-block.is-reservation:hover rect.body { fill: var(--bg-2); }
+.viz-block.is-reservation:hover rect.body,
+.viz-block.is-reservation.hover rect.body { fill: var(--bg-2); }
 .viz-block.is-reservation text { fill: var(--warn); }
 
 .node.is-reservation .cidr { color: var(--warn); }
