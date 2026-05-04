@@ -889,54 +889,6 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 }
 
-// Render a /prefix CIDR's mask as dotted-quad — Infoblox CSV exports use
-// "255.255.255.240" rather than "/28", and we want our exports to look
-// like real exports.
-function cidrToDottedNetmask(cidr) {
-  const prefix = +cidr.split('/')[1];
-  const mask = prefix === 0 ? 0 : ((~0 << (32 - prefix)) >>> 0);
-  return [(mask>>>24)&255, (mask>>>16)&255, (mask>>>8)&255, mask&255].join('.');
-}
-
-// Quote a CSV field if it contains commas, quotes, or newlines (RFC 4180).
-function csvField(v) {
-  const s = (v === null || v === undefined) ? '' : String(v);
-  return /[,"\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s;
-}
-
-// Produce CSV in the same shape vnp's import accepts (see
-// docs/infoblox-csv-schema.md). Reservations are vnp-only and don't have
-// an Infoblox counterpart; callers can pass them but they're emitted as
-// a comment-prefixed networkcontainer block isn't a real Infoblox concept,
-// so we drop them and the caller surfaces a hint to the user.
-function formatInfobloxCsv({ supernets = [], allocations = [] }) {
-  const sections = [];
-  const COLUMNS = 'address*,netmask*,comment,EA-Network Name,EA-TAGS';
-  const row = (kind, rec) => {
-    const addr = rec.cidr.split('/')[0];
-    const mask = cidrToDottedNetmask(rec.cidr);
-    const tags = (rec.tags || []).join(',');
-    return [
-      kind,
-      csvField(addr),
-      csvField(mask),
-      csvField(rec.description || ''),
-      csvField(rec.name || ''),
-      csvField(tags),
-    ].join(',');
-  };
-  if (supernets.length) {
-    sections.push(['header-networkcontainer,' + COLUMNS,
-                   ...supernets.map(s => row('networkcontainer', s))].join('\n'));
-  }
-  if (allocations.length) {
-    sections.push(['header-network,' + COLUMNS,
-                   ...allocations.map(a => row('network', a))].join('\n'));
-  }
-  // Blank line between header blocks; trailing newline so the file ends cleanly.
-  return sections.join('\n\n') + '\n';
-}
-
 function populateParents() {
   const wrap = document.getElementById('parentPicker');
   wrap.innerHTML = '';
@@ -1587,30 +1539,24 @@ document.addEventListener('click', (e) => {
 });
 
 //==========================================================
-//  Export plan as Infoblox CSV (round-trips through Import tab)
+//  Export plan as JSON (full fidelity — supernets, allocations, reservations)
 //==========================================================
 document.getElementById('exportBtn').addEventListener('click', () => {
-  const csv = formatInfobloxCsv({
-    supernets:   PLAN.supernets   || [],
-    allocations: PLAN.allocations || [],
-  });
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const payload = {
+    name:         PLAN.name,
+    supernets:    PLAN.supernets    || [],
+    allocations:  PLAN.allocations  || [],
+    reservations: PLAN.reservations || [],
+  };
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${PLAN.name || 'plan'}.csv`;
+  a.download = `${PLAN.name || 'plan'}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-  // Reservations are a vnp-only concept (no Infoblox counterpart) so the
-  // CSV export drops them. Mention it explicitly so the user can grab the
-  // raw plan JSON file from disk if they need full fidelity.
-  const nResv = (PLAN.reservations || []).length;
-  toast(
-    nResv > 0
-      ? `exported ${PLAN.name}.csv · ${nResv} reservation${nResv === 1 ? '' : 's'} omitted (vnp-only)`
-      : `exported ${PLAN.name}.csv`,
-    'ok',
-  );
+  toast(`exported ${PLAN.name}.json`, 'ok');
 });
 
 //==========================================================
