@@ -1144,24 +1144,29 @@ function renderProposals() {
     list.appendChild(row);
   });
 
-  // Wire the copy button. Output is Infoblox-compatible CSV using the
-  // same schema vnp's import accepts (docs/infoblox-csv-schema.md), so
-  // copying preview rows and pasting them into another vnp instance — or
-  // a real Infoblox import — round-trips cleanly.
+  // Wire the copy button. Output is TSV with a header so it pastes into
+  // a spreadsheet as columns AND still reads as tabular text in a chat
+  // / ticket. (The Export button in the topbar uses Infoblox CSV — that's
+  // for whole-plan handoff to other tools; this is for ad-hoc paste.)
   const copyBtn = document.getElementById('proposalsCopyBtn');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
       const fits = enriched.filter(p => p.cidr);
-      const tagsValue = (document.getElementById('carveTags').value || '');
-      const tags = tagsValue.split(',').map(s => s.trim()).filter(Boolean);
-      const allocations = fits.map(p => ({
-        cidr: p.cidr,
-        name: p.childName || '',
-        description: '',
-        tags,
-      }));
-      const csv = formatInfobloxCsv({ allocations });
-      copyText(csv, `copied ${fits.length} row${fits.length === 1 ? '' : 's'} as Infoblox CSV`);
+      const lines = ['cidr\tname\tparent_cidr\tparent_name\tsize\tprefix'];
+      for (const p of fits) {
+        const pi = cidrInfo(p.cidr);
+        const parentItem = TREE.items.find(it => it.cidr === p.parent);
+        const parentName = (parentItem && parentItem.name) || '';
+        lines.push([
+          p.cidr,
+          p.childName || '',
+          p.parent,
+          parentName,
+          pi.size,
+          `/${pi.prefix}`,
+        ].join('\t'));
+      }
+      copyText(lines.join('\n'), `copied ${fits.length} row${fits.length === 1 ? '' : 's'}`);
     });
   }
 
