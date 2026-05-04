@@ -409,7 +409,13 @@ function renderNode(node, isRoot) {
 //  Render viz (D3)
 //==========================================================
 const vizEl = document.getElementById('viz');
+const vizWrap = document.getElementById('vizWrap');
 function renderViz() {
+  // Preserve scroll position across the rebuild. Clearing innerHTML briefly
+  // collapses the scroll container's content, which causes the browser to
+  // clamp scrollTop down — without the snapshot/restore, every render would
+  // jump back to the top.
+  const savedScroll = vizWrap ? vizWrap.scrollTop : 0;
   vizEl.innerHTML = '';
   const supers = TREE.roots.filter(r => r.kind === 'supernet');
 
@@ -482,6 +488,12 @@ function renderViz() {
   if (!targets.length) {
     vizEl.innerHTML = '<div style="padding:48px; text-align:center; color:var(--fg-3); font-family:JetBrains Mono,monospace; font-size:12px;">no supernets in scope</div>';
   }
+
+  // Restore scroll synchronously — by this point all wraps are appended so
+  // scrollHeight has grown back to its full value and the assignment isn't
+  // clamped. The browser doesn't paint between this and the earlier DOM
+  // mutations, so there's no visible flicker.
+  if (vizWrap) vizWrap.scrollTop = savedScroll;
 }
 
 function maxDepth(n) {
