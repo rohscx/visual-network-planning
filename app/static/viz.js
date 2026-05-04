@@ -1096,17 +1096,28 @@ function renderProposals() {
     list.appendChild(row);
   });
 
-  // Wire the copy button after it's in the DOM. Format is one line per
-  // fit proposal: "<cidr>\t<name>" if a name was resolved, else just
-  // "<cidr>". Pastes cleanly into spreadsheets, tickets, terraform, etc.
+  // Wire the copy button after it's in the DOM. Output is TSV with a
+  // header so it pastes into a spreadsheet as columns AND still reads as
+  // tabular text in a chat / ticket.
   const copyBtn = document.getElementById('proposalsCopyBtn');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
-      const text = enriched
-        .filter(p => p.cidr)
-        .map(p => p.childName ? `${p.cidr}\t${p.childName}` : p.cidr)
-        .join('\n');
-      copyText(text, `copied ${okCount} CIDR${okCount === 1 ? '' : 's'}`);
+      const fits = enriched.filter(p => p.cidr);
+      const lines = ['cidr\tname\tparent_cidr\tparent_name\tsize\tprefix'];
+      for (const p of fits) {
+        const pi = cidrInfo(p.cidr);
+        const parentItem = TREE.items.find(it => it.cidr === p.parent);
+        const parentName = (parentItem && parentItem.name) || '';
+        lines.push([
+          p.cidr,
+          p.childName || '',
+          p.parent,
+          parentName,
+          pi.size,
+          `/${pi.prefix}`,
+        ].join('\t'));
+      }
+      copyText(lines.join('\n'), `copied ${fits.length} row${fits.length === 1 ? '' : 's'}`);
     });
   }
 
