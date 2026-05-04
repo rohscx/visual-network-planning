@@ -700,6 +700,7 @@ function bindHover(el, node) {
   el.addEventListener('click', (e) => {
     e.stopPropagation();
     selectCidr(node.cidr);
+    openDetail(node.cidr);   // mirror tree-row click: open the editor too
   });
 }
 function bindHoverFree(el, p, parent) {
