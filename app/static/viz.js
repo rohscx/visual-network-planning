@@ -250,7 +250,10 @@ function highlightMatch(text, q) {
   const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'ig');
   return safe.replace(re, '<mark>$1</mark>');
 }
-function copyText(t) {
+function copyText(t, successMsg) {
+  // For long/multi-line copies (e.g. "copy all" of carve proposals), pass
+  // a short successMsg so the toast doesn't echo the whole pasted blob.
+  const okMsg = successMsg || `copied: ${t}`;
   const fallback = () => {
     try {
       const ta = document.createElement('textarea');
@@ -259,12 +262,12 @@ function copyText(t) {
       document.body.appendChild(ta); ta.select();
       const ok = document.execCommand('copy');
       ta.remove();
-      toast(ok ? `copied: ${t}` : 'clipboard blocked', ok ? 'ok' : 'err');
+      toast(ok ? okMsg : 'clipboard blocked', ok ? 'ok' : 'err');
     } catch { toast('clipboard blocked', 'err'); }
   };
   if (navigator.clipboard?.writeText) {
     navigator.clipboard.writeText(t).then(
-      () => toast(`copied: ${t}`, 'ok'),
+      () => toast(okMsg, 'ok'),
       fallback
     );
   } else fallback();
@@ -1010,6 +1013,21 @@ function resolveCarveName(tmpl, parentCidr, n) {
   return tmpl.replaceAll('{parent}', parentLabel).replaceAll('{n}', String(n));
 }
 
+// Resolve names for every proposal once, reused by both the rendered rows
+// and the "copy all" button so they always agree.
+function enrichProposals() {
+  const tmpl = document.getElementById('carveName').value || '';
+  const perParentIdx = {};
+  return STATE.proposals.map((p) => {
+    let childName = '';
+    if (p.cidr) {
+      perParentIdx[p.parent] = (perParentIdx[p.parent] || 0) + 1;
+      childName = resolveCarveName(tmpl, p.parent, perParentIdx[p.parent]);
+    }
+    return { ...p, childName };
+  });
+}
+
 function renderProposals() {
   const list = document.getElementById('proposalsList');
   if (!STATE.proposals.length) {
@@ -1019,13 +1037,30 @@ function renderProposals() {
   }
   list.style.display = '';
   list.innerHTML = '';
-  // Resolve each proposed child's name from the current template, with {n}
-  // resetting per parent — so preview matches what commit will actually
-  // produce.
-  const tmpl = document.getElementById('carveName').value || '';
-  const perParentIdx = {};
-  let okCount = 0;
-  STATE.proposals.forEach((p) => {
+
+  const enriched = enrichProposals();
+  const okCount = enriched.filter(p => p.cidr).length;
+
+  // Header strip: count + "copy all" button. Only when there's at least
+  // one fit to copy.
+  if (okCount > 0) {
+    const header = document.createElement('div');
+    header.className = 'proposal-header';
+    header.innerHTML = `
+      <span class="proposal-summary">${okCount} proposed</span>
+      <button type="button" class="btn ghost proposals-copy-btn" id="proposalsCopyBtn"
+              title="Copy CIDRs (and names if templated) to clipboard">
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2"/>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+        copy all
+      </button>
+    `;
+    list.appendChild(header);
+  }
+
+  enriched.forEach((p) => {
     const row = document.createElement('div');
     row.className = 'proposal' + (p.cidr ? '' : ' no-fit');
     // Look up the parent's human-readable name so the preview row reads
@@ -1036,11 +1071,8 @@ function renderProposals() {
       ? `<b>${p.parent}</b> <span style="color:var(--fg-2)">${escapeHtml(parentName)}</span>`
       : `<b>${p.parent}</b>`;
     if (p.cidr) {
-      okCount++;
-      perParentIdx[p.parent] = (perParentIdx[p.parent] || 0) + 1;
-      const childName = resolveCarveName(tmpl, p.parent, perParentIdx[p.parent]);
-      const childNameHtml = childName
-        ? `<span class="pname">${escapeHtml(childName)}</span>`
+      const childNameHtml = p.childName
+        ? `<span class="pname">${escapeHtml(p.childName)}</span>`
         : '';
       const pi = cidrInfo(p.cidr);
       row.innerHTML = `
@@ -1063,6 +1095,21 @@ function renderProposals() {
     }
     list.appendChild(row);
   });
+
+  // Wire the copy button after it's in the DOM. Format is one line per
+  // fit proposal: "<cidr>\t<name>" if a name was resolved, else just
+  // "<cidr>". Pastes cleanly into spreadsheets, tickets, terraform, etc.
+  const copyBtn = document.getElementById('proposalsCopyBtn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      const text = enriched
+        .filter(p => p.cidr)
+        .map(p => p.childName ? `${p.cidr}\t${p.childName}` : p.cidr)
+        .join('\n');
+      copyText(text, `copied ${okCount} CIDR${okCount === 1 ? '' : 's'}`);
+    });
+  }
+
   document.getElementById('commitCount').textContent = okCount ? `(${okCount})` : '';
   document.getElementById('carveCommitBtn').disabled = okCount === 0;
 }

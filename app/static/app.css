@@ -689,6 +689,33 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .proposal.no-fit { border-left-color: var(--err); opacity: 0.85; }
 .proposal .icon { color: var(--acc); }
 .proposal.no-fit .icon { color: var(--err); }
+.proposal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 6px;
+  border-bottom: 1px dashed var(--line);
+  margin-bottom: 6px;
+}
+.proposal-summary {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+.proposals-copy-btn {
+  height: auto;
+  padding: 3px 8px;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-2);
+}
+.proposals-copy-btn:hover { color: var(--acc); border-color: var(--acc); }
+.proposals-copy-btn svg { flex-shrink: 0; }
+
 .proposal .pcidr { font-size: 12px; font-weight: 600; color: var(--fg); }
 .proposal .pcidr .pname {
   margin-left: 8px;
