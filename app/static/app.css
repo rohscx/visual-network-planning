@@ -894,6 +894,22 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   padding: 4px;
 }
 .searchbar .x:hover { color: var(--fg); }
+.searchbar .search-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+.searchbar .search-copy-btn:hover { color: var(--acc); border-color: var(--acc); }
+.searchbar .search-copy-btn svg { flex-shrink: 0; }
 
 /* tree node hidden by search */
 .node.hidden { display: none; }

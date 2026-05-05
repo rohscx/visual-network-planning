@@ -179,7 +179,8 @@ const STATE = {
   zoom:         'all',
   proposals:    [],
   tab:          'add',
-  search:       '',
+  search:       '',     // raw user input
+  searchRe:     null,   // compiled RegExp (or null when search is empty)
   tagFilter:    null,
   detailCidr:   null,
 };
@@ -222,18 +223,30 @@ async function refresh() {
 //  Search / matching / copy
 //==========================================================
 function norm(s) { return (s||'').toLowerCase(); }
-function nodeMatches(node, q) {
-  if (!q) return { self: false, descendant: false };
-  const ql = q.toLowerCase();
+// Compile the user's search input into a case-insensitive regex. If the
+// input isn't valid regex (mismatched parens, dangling quantifier), fall
+// back to a literal-string match so the UI doesn't blank itself while the
+// user is mid-typing something like "(prod" or "[".
+function compileSearch(q) {
+  if (!q) return null;
+  try { return new RegExp(q, 'i'); }
+  catch {
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(escaped, 'i');
+  }
+}
+
+function nodeMatches(node, re) {
+  if (!re) return { self: false, descendant: false };
   // Effective tags include inherited ones, so searching "prod" finds every
   // child of a "prod"-tagged supernet, not just the supernet itself.
-  const self = norm(node.cidr).includes(ql)
-            || norm(node.name).includes(ql)
-            || effectiveTags(node).some(t => norm(t).includes(ql))
-            || norm(node.description).includes(ql);
+  const self = re.test(node.cidr)
+            || re.test(node.name || '')
+            || effectiveTags(node).some(t => re.test(t))
+            || re.test(node.description || '');
   let descendant = false;
-  for (const c of (node.children||[])) {
-    const m = nodeMatches(c, q);
+  for (const c of (node.children || [])) {
+    const m = nodeMatches(c, re);
     if (m.self || m.descendant) { descendant = true; break; }
   }
   return { self, descendant };
@@ -243,12 +256,15 @@ function nodePassesTag(node, tag) {
   if (effectiveTags(node).includes(tag)) return true;
   return (node.children||[]).some(c => nodePassesTag(c, tag));
 }
-function highlightMatch(text, q) {
+function highlightMatch(text, re) {
   if (!text) return '';
   const safe = String(text).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-  if (!q) return safe;
-  const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'ig');
-  return safe.replace(re, '<mark>$1</mark>');
+  if (!re) return safe;
+  // Build a global version of the live regex so replace() wraps every
+  // match (e.g. "mis|qe|raas" highlights all three terms in one field).
+  const flags = re.flags.includes('g') ? re.flags : re.flags + 'g';
+  const reG = new RegExp(re.source, flags);
+  return safe.replace(reG, m => `<mark>${m}</mark>`);
 }
 function copyText(t, successMsg) {
   // For long/multi-line copies (e.g. "copy all" of carve proposals), pass
@@ -326,8 +342,8 @@ function renderNode(node, isRoot) {
   el.dataset.leaf = node.children.length === 0 && (node.free||[]).length === 0 ? 'true' : 'false';
   if (STATE.selectedCidr === node.cidr) el.classList.add('selected');
 
-  const matches = nodeMatches(node, STATE.search);
-  if (STATE.search) {
+  const matches = nodeMatches(node, STATE.searchRe);
+  if (STATE.searchRe) {
     if (matches.self) el.classList.add('match');
     if (!matches.self && !matches.descendant) el.classList.add('hidden');
   }
@@ -339,8 +355,8 @@ function renderNode(node, isRoot) {
 
   const row = document.createElement('div');
   row.className = 'row';
-  const matchedName = highlightMatch(node.name || '', STATE.search);
-  const matchedCidr = highlightMatch(node.cidr, STATE.search);
+  const matchedName = highlightMatch(node.name || '', STATE.searchRe);
+  const matchedCidr = highlightMatch(node.cidr, STATE.searchRe);
   row.innerHTML = `
     <span class="twist"></span>
     <span style="display:flex; align-items:center; min-width:0; gap:0;">
@@ -444,9 +460,18 @@ function renderViz() {
   }
 
   const focus = STATE.zoom === 'focus' && STATE.selectedCidr;
-  const targets = focus
+  let targets = focus
     ? supers.filter(s => isSubnetOf(STATE.selectedCidr, s.cidr) || s.cidr === STATE.selectedCidr || isSubnetOf(s.cidr, STATE.selectedCidr))
     : supers;
+  // When search is active, hide entire supernets that contain zero matches
+  // (declutters the canvas without distorting spatial proportions inside
+  // the supernets that do contain matches).
+  if (STATE.searchRe) {
+    targets = targets.filter(s => {
+      const m = nodeMatches(s, STATE.searchRe);
+      return m.self || m.descendant;
+    });
+  }
 
   for (const root of targets) {
     const wrap = document.createElement('div');
@@ -488,7 +513,10 @@ function renderViz() {
   }
 
   if (!targets.length) {
-    vizEl.innerHTML = '<div style="padding:48px; text-align:center; color:var(--fg-3); font-family:JetBrains Mono,monospace; font-size:12px;">no supernets in scope</div>';
+    const msg = STATE.searchRe
+      ? 'no supernets contain matches · clear search to see everything'
+      : 'no supernets in scope';
+    vizEl.innerHTML = `<div style="padding:48px; text-align:center; color:var(--fg-3); font-family:JetBrains Mono,monospace; font-size:12px;">${msg}</div>`;
   }
 
   // Restore scroll synchronously — by this point all wraps are appended so
@@ -510,7 +538,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
   const innerH = Math.max(0, h - padTop - pad);
 
   const dimByFilter = (STATE.tagFilter && !nodePassesTag(node, STATE.tagFilter))
-                   || (STATE.search && !(nodeMatches(node, STATE.search).self || nodeMatches(node, STATE.search).descendant));
+                   || (STATE.searchRe && !(nodeMatches(node, STATE.searchRe).self || nodeMatches(node, STATE.searchRe).descendant));
   const inConflict = SERVER.conflicts.some(([a,b]) => a === node.cidr || b === node.cidr);
   const g = svg.append('g').attr('class', 'viz-block' +
     (node.kind === 'supernet'    ? ' is-supernet'    : '') +
@@ -1479,6 +1507,8 @@ function closeSearch() {
   searchbar.classList.remove('on');
   searchInput.value = '';
   STATE.search = '';
+  STATE.searchRe = null;
+  document.getElementById('searchCopyBtn').style.display = 'none';
   renderTree(); renderViz();
   searchMatches.textContent = '';
 }
@@ -1486,15 +1516,42 @@ document.getElementById('searchBtn').addEventListener('click', openSearch);
 document.getElementById('searchCloseBtn').addEventListener('click', closeSearch);
 searchInput.addEventListener('input', () => {
   STATE.search = searchInput.value.trim();
+  STATE.searchRe = compileSearch(STATE.search);
   let count = 0;
-  if (STATE.search) {
-    for (const it of TREE.items) if (nodeMatches(it, STATE.search).self) count++;
+  if (STATE.searchRe) {
+    for (const it of TREE.items) if (nodeMatches(it, STATE.searchRe).self) count++;
   }
-  searchMatches.textContent = STATE.search ? `${count} match${count===1?'':'es'}` : '';
+  searchMatches.textContent = STATE.searchRe ? `${count} match${count === 1 ? '' : 'es'}` : '';
+  document.getElementById('searchCopyBtn').style.display =
+    (STATE.searchRe && count > 0) ? '' : 'none';
   renderTree(); renderViz();
 });
 searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeSearch();
+});
+
+// Copy every matched node as TSV with header — pastes into a spreadsheet
+// or sits cleanly in a ticket. Uses the same regex the search uses, so
+// the copy and the on-screen highlights agree.
+document.getElementById('searchCopyBtn').addEventListener('click', () => {
+  if (!STATE.searchRe) return;
+  const hits = TREE.items.filter(it => nodeMatches(it, STATE.searchRe).self);
+  if (!hits.length) return;
+  hits.sort((a, b) => a.start - b.start);
+  const lines = ['cidr\tname\tkind\tparent_cidr\tparent_name\ttags\tdescription'];
+  for (const it of hits) {
+    const par = parentOf(it.cidr);
+    lines.push([
+      it.cidr,
+      it.name || '',
+      it.kind,
+      par ? par.cidr : '',
+      par && par.name ? par.name : '',
+      effectiveTags(it).join(','),
+      (it.description || '').replace(/[\t\n\r]/g, ' '),  // keep TSV intact
+    ].join('\t'));
+  }
+  copyText(lines.join('\n'), `copied ${hits.length} match${hits.length === 1 ? '' : 'es'}`);
 });
 
 //==========================================================

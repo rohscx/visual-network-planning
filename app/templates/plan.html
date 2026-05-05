@@ -33,8 +33,18 @@
 <!-- search bar (toggled with /) -->
 <div class="searchbar" id="searchbar">
   <span style="font-family:'JetBrains Mono',monospace; color:var(--fg-3); font-size:11px;">/</span>
-  <input type="text" id="searchInput" placeholder="Search by CIDR, name, or tag — Esc to close">
+  <input type="text" id="searchInput"
+         placeholder="Search by CIDR, name, tag, or description — regex supported (e.g. mis|qe|raas) · Esc to close"
+         autocomplete="off" spellcheck="false">
   <span class="matches" id="searchMatches"></span>
+  <button class="search-copy-btn" id="searchCopyBtn" style="display:none;"
+          title="Copy all matches as TSV (cidr / name / kind / parent / tags / description)">
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="9" y="9" width="13" height="13" rx="2"/>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    </svg>
+    <span>copy</span>
+  </button>
   <button class="x" id="searchCloseBtn" title="Close (Esc)">×</button>
 </div>
 
