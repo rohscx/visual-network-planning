@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -24,9 +24,6 @@
   </div>
   <div class="actions">
     {% block topbar_actions %}{% endblock %}
-    <button class="iconbtn" id="themeBtn" title="Toggle theme (t)">
-      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-    </button>
   </div>
 </div>
 
@@ -46,32 +43,6 @@
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
-  // Theme toggle (works on every page)
-  (function () {
-    const root = document.documentElement;
-    const saved = localStorage.getItem('vnp.theme');
-    if (saved === 'dark' || saved === 'light') root.setAttribute('data-theme', saved);
-    const btn = document.getElementById('themeBtn');
-    const icon = document.getElementById('themeIcon');
-    function applyIcon() {
-      icon.innerHTML = root.getAttribute('data-theme') === 'dark'
-        ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
-        : '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>';
-    }
-    btn.addEventListener('click', () => {
-      const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-      root.setAttribute('data-theme', next);
-      localStorage.setItem('vnp.theme', next);
-      applyIcon();
-      window.dispatchEvent(new CustomEvent('vnp:theme'));
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.target.matches('input, select, textarea')) return;
-      if (e.key === 't') btn.click();
-    });
-    applyIcon();
-  })();
-
   // Tiny global toast usable from any page.
   window.toast = function (msg, kind) {
     const el = document.getElementById('toast');

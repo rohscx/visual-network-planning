@@ -24,11 +24,12 @@ Opens `http://127.0.0.1:5050` in your browser.
 
 Three-pane plan view: hierarchy tree on the left, D3 nested-rectangle
 visualization in the middle (the hero), command rail on the right with
-**add / carve / import** tabs. Dark and light themes (toggle top-right
-or press <kbd>t</kbd>); JetBrains Mono for CIDRs, Geist Sans for prose.
+**add / carve / import** tabs. Dark theme only — the aesthetic is
+terminal/engineering and a light variant felt out of place.
+JetBrains Mono for CIDRs, Geist Sans for prose.
 
-Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>t</kbd> theme ·
-<kbd>Esc</kbd> closes overlays.
+Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>Esc</kbd>
+closes overlays.
 
 ## What it does
 

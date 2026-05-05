@@ -435,7 +435,6 @@ function renderViz() {
         <div class="empty-hints">
           <span><kbd>/</kbd> search</span>
           <span><kbd>c</kbd> carve</span>
-          <span><kbd>t</kbd> theme</span>
         </div>
       </div>
     `;
@@ -1596,7 +1595,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '/') { e.preventDefault(); openSearch(); }
 });
 
-window.addEventListener('vnp:theme', () => { renderViz(); updateLegend(); });
 window.addEventListener('resize', () => { clearTimeout(window.__rs); window.__rs = setTimeout(renderViz, 120); });
 
 // ---- init ----
