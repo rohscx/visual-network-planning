@@ -31,7 +31,7 @@ PLATFORMS=(
   "macosx_11_0_arm64"
   "manylinux2014_x86_64"
 )
-PYVERS=(3.11 3.12 3.13)
+PYVERS=(3.10 3.11 3.12 3.13 3.14)
 
 # Prefer the project's venv pip so the script honours whatever Python
 # the user actually develops with; fall back to system pip if no venv

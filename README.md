@@ -27,7 +27,7 @@ If the host where you want to run vnp can't reach PyPI, grab
 [Releases](https://github.com/rohscx/visual-network-planning/releases)
 page. It bundles every Python dependency vnp needs as wheels — pure-Python
 ones once, plus MarkupSafe's compiled wheels for **macOS arm64** and
-**Linux x86_64** across Python **3.11 / 3.12 / 3.13**. Then:
+**Linux x86_64** across Python **3.10 – 3.14**. Then:
 
 ```bash
 tar -xzf vnp-deps.tar.gz
