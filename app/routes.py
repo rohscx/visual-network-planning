@@ -120,6 +120,28 @@ def delete_plan(name: str):
     return redirect(url_for("main.index"))
 
 
+@bp.post("/plans/<name>/copy")
+def copy_plan(name: str):
+    new_name = (request.form.get("new_name") or "").strip()
+    try:
+        storage.copy_plan(_plans_dir(), name, new_name)
+    except (ValueError, FileExistsError, FileNotFoundError) as e:
+        flash(str(e), "error")
+        return redirect(url_for("main.index"))
+    return redirect(url_for("main.view_plan", name=new_name))
+
+
+@bp.post("/plans/<name>/rename")
+def rename_plan(name: str):
+    new_name = (request.form.get("new_name") or "").strip()
+    try:
+        storage.rename_plan(_plans_dir(), name, new_name)
+    except (ValueError, FileExistsError, FileNotFoundError) as e:
+        flash(str(e), "error")
+        return redirect(url_for("main.index"))
+    return redirect(url_for("main.view_plan", name=new_name))
+
+
 # ---------------------------------------------------------------------------
 # Plan view (SPA shell)
 # ---------------------------------------------------------------------------

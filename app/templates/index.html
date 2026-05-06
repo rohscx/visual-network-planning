@@ -41,7 +41,11 @@
               </td>
               <td>{{ p.modified[:16].replace('T', ' ') if p.modified else '—' }}</td>
               <td><span class="pill {{ p.status_kind }}">{{ p.status_label }}</span></td>
-              <td>
+              <td class="row-actions">
+                <button type="button" class="linkact" title="Duplicate plan"
+                        data-action="copy" data-plan="{{ p.name }}">⎘</button>
+                <button type="button" class="linkact" title="Rename plan"
+                        data-action="rename" data-plan="{{ p.name }}">✎</button>
                 <form class="del" method="post" action="{{ url_for('main.delete_plan', name=p.name) }}"
                       onsubmit="return confirm('Delete plan {{ p.name }}? The JSON file will be removed.');">
                   <button class="linkdel" type="submit" title="Delete plan">×</button>
@@ -69,4 +73,43 @@
     <p class="hint" style="margin-top: 6px;">letters · digits · dot · underscore · hyphen — up to 64 chars</p>
   </form>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Copy / rename use the same flow: prompt for a new name, then submit a
+  // small auto-built form to the right endpoint. The browser does the
+  // POST + redirect; the server validates the new name and updates the
+  // "name" field inside the JSON to match the new filename.
+  (function () {
+    const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+    function submitNamedAction(planName, action, newName) {
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = `/plans/${encodeURIComponent(planName)}/${action}`;
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'new_name';
+      input.value = newName;
+      form.appendChild(input);
+      document.body.appendChild(form);
+      form.submit();
+    }
+    document.querySelectorAll('button.linkact[data-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;        // 'copy' | 'rename'
+        const plan   = btn.dataset.plan;
+        const verb   = action === 'copy' ? 'Copy' : 'Rename';
+        const suggested = action === 'copy' ? plan + '-copy' : plan;
+        const newName = (window.prompt(`${verb} "${plan}" → name?`, suggested) || '').trim();
+        if (!newName || newName === plan) return;
+        if (!NAME_PATTERN.test(newName)) {
+          alert('Name must match: letters, digits, dot, underscore, hyphen — up to 64 chars');
+          return;
+        }
+        submitNamedAction(plan, action, newName);
+      });
+    });
+  })();
+</script>
 {% endblock %}

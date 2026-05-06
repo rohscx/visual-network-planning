@@ -775,11 +775,18 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .plan-table .name a { color: var(--acc); }
 .plan-table .name a:hover { text-decoration: underline; }
 .plan-table form.del { display: inline; }
-.plan-table button.linkdel {
+.plan-table .row-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+.plan-table button.linkdel,
+.plan-table button.linkact {
   background: transparent; border: none; color: var(--fg-3);
   cursor: pointer; font-size: 14px; padding: 0 4px;
+  font-family: inherit;
 }
 .plan-table button.linkdel:hover { color: var(--err); }
+.plan-table button.linkact:hover { color: var(--acc); }
 
 /* ---- Banner ---- */
 .banner {

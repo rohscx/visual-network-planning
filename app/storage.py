@@ -61,3 +61,46 @@ def plan_modified(plans_dir: Path, name: str) -> str:
         return ""
     ts = _dt.datetime.fromtimestamp(path.stat().st_mtime, _dt.timezone.utc)
     return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def copy_plan(plans_dir: Path, src_name: str, dst_name: str) -> Plan:
+    """Duplicate a plan under a new name.
+
+    Loads `src_name`, rewrites the `name` field to `dst_name` so the JSON's
+    self-identifier stays in sync with the file on disk, and saves the
+    result. Raises FileNotFoundError if the source doesn't exist,
+    FileExistsError if the target already does, ValueError on bad names.
+    """
+    safe_name(dst_name)
+    if src_name == dst_name:
+        raise ValueError("source and destination names are the same")
+    dst_path = plan_path(plans_dir, dst_name)
+    if dst_path.exists():
+        raise FileExistsError(f"Plan '{dst_name}' already exists")
+    plan = load_plan(plans_dir, src_name)
+    plan.name = dst_name
+    save_plan(plans_dir, plan)
+    return plan
+
+
+def rename_plan(plans_dir: Path, src_name: str, dst_name: str) -> Plan:
+    """Rename a plan in place.
+
+    Equivalent to copy_plan(src → dst) followed by removing the src file.
+    The save-then-delete order means a crash in the middle leaves both
+    files behind rather than losing data; the user can sort it out.
+    """
+    safe_name(dst_name)
+    if src_name == dst_name:
+        raise ValueError("source and destination names are the same")
+    src_path = plan_path(plans_dir, src_name)
+    dst_path = plan_path(plans_dir, dst_name)
+    if not src_path.exists():
+        raise FileNotFoundError(f"Plan '{src_name}' not found")
+    if dst_path.exists():
+        raise FileExistsError(f"Plan '{dst_name}' already exists")
+    plan = load_plan(plans_dir, src_name)
+    plan.name = dst_name
+    save_plan(plans_dir, plan)
+    src_path.unlink()
+    return plan
