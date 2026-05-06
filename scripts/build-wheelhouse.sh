@@ -63,14 +63,34 @@ for plat in "${PLATFORMS[@]}"; do
   done
 done
 
+# pip evaluates environment markers against the *build host's* Python,
+# not the --python-version target, so deps gated on `python_version <
+# "3.11"` (notably tomli, which pytest needs on 3.10 since tomllib didn't
+# join the stdlib until 3.11) are skipped. Pull tomli explicitly for 3.10
+# on every platform. Recent tomli versions ship with C extensions, so we
+# need a wheel per (platform, python-version) cell — same matrix shape
+# as MarkupSafe.
+for plat in "${PLATFORMS[@]}"; do
+  echo "  · marker-gated tomli for python 3.10 · ${plat}"
+  "${PIP}" download \
+    --quiet \
+    --dest "${WHEELHOUSE}" \
+    --no-deps \
+    --platform "${plat}" \
+    --python-version 3.10 \
+    --only-binary ":all:" \
+    tomli
+done
+
 echo "→ Tarring → ${OUTPUT}"
 TAR_FLAGS=(-czf "${OUTPUT}" -C "${ROOT}")
-# Keep macOS resource forks out of the bundle when building on macOS
-# (BSD tar only; harmless to skip on GNU tar).
+# Keep macOS resource forks / xattr metadata out of the bundle. The flag
+# below works on macOS Sonoma+; COPYFILE_DISABLE=1 covers older bsdtar
+# and AppleDouble fallback. GNU tar on Linux ignores both — no-op there.
 if tar --help 2>&1 | grep -q -- '--no-mac-metadata'; then
   TAR_FLAGS+=(--no-mac-metadata)
 fi
-tar "${TAR_FLAGS[@]}" wheelhouse
+COPYFILE_DISABLE=1 tar "${TAR_FLAGS[@]}" wheelhouse
 
 # Tarred — drop the loose wheelhouse so a Ctrl-C during a re-run can't
 # blend stale wheels with fresh ones.
