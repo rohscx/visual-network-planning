@@ -20,6 +20,30 @@ python run.py
 
 Opens `http://127.0.0.1:5050` in your browser.
 
+## Offline / air-gapped install
+
+If the host where you want to run vnp can't reach PyPI, grab
+`vnp-deps.tar.gz` from the
+[Releases](https://github.com/rohscx/visual-network-planning/releases)
+page. It bundles every Python dependency vnp needs as wheels — pure-Python
+ones once, plus MarkupSafe's compiled wheels for **macOS arm64** and
+**Linux x86_64** across Python **3.11 / 3.12 / 3.13**. Then:
+
+```bash
+tar -xzf vnp-deps.tar.gz
+python3 -m venv .venv
+.venv/bin/pip install --no-index --find-links wheelhouse/ -r requirements.txt
+python run.py
+```
+
+The `--no-index` flag tells pip not to try PyPI, so the install stays
+fully offline.
+
+To rebuild the bundle (e.g. after editing `requirements.txt`, or to
+target a different platform / Python version), run
+`./scripts/build-wheelhouse.sh`. The script's header comment documents
+the `PLATFORMS` and `PYVERS` arrays you'd edit to add coverage.
+
 ## UI
 
 Three-pane plan view: hierarchy tree on the left, D3 nested-rectangle

@@ -16,3 +16,12 @@ plans/*.json
 
 # Source data (Infoblox exports etc. typically contain real environment info)
 *.csv
+
+# Offline-install bundle — built by scripts/build-wheelhouse.sh and
+# published as a GitHub Release asset, not committed to the repo.
+vnp-deps.tar.gz
+wheelhouse/
+
+# Transient working dir for scripts/build-wheelhouse.sh — the script tars
+# this and removes it, but a Ctrl-C mid-run can leave it behind.
+wheelhouse/
