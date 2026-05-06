@@ -323,7 +323,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .viz-block rect { transition: filter .12s ease, stroke-width .12s ease; }
 .viz-block.hover > rect.body { filter: brightness(1.22); stroke: var(--acc); stroke-width: 1.5; }
 .viz-block.selected > rect.body { stroke: var(--acc); stroke-width: 2; }
-.viz-block.dim > rect.body { opacity: 0.35; }
+.viz-block.dim > rect.body,
+.viz-block.dim-filter > rect.body { opacity: 0.35; }
 .viz-block text {
   font-family: "JetBrains Mono", monospace;
   font-size: 10px;

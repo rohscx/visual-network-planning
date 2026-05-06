@@ -459,6 +459,18 @@ function renderViz() {
     return;
   }
 
+  // Cache CSS variable lookups for the duration of the render. Each
+  // getCss() call goes through getComputedStyle, which forces a sync
+  // style recalc — and we'd otherwise hit it ~3× per node × hundreds of
+  // nodes, which dominates the click→paint time on slower machines.
+  const CSS_VARS = {
+    supernet: getCss('--supernet'),
+    bg3:      getCss('--bg-3'),
+    used:     getCss('--used'),
+    line:     getCss('--line'),
+    acc:      getCss('--acc'),
+  };
+
   const focus = STATE.zoom === 'focus' && STATE.selectedCidr;
   let targets = focus
     ? supers.filter(s => isSubnetOf(STATE.selectedCidr, s.cidr) || s.cidr === STATE.selectedCidr || isSubnetOf(s.cidr, STATE.selectedCidr))
@@ -507,8 +519,8 @@ function renderViz() {
       .attr('preserveAspectRatio', 'none')
       .style('height', height + 'px');
 
-    drawNode(svg, root, 0, 0, width, height, 0, root);
-    drawProposalOverlays(svg, root, 0, 0, width, height);
+    drawNode(svg, root, 0, 0, width, height, 0, root, CSS_VARS);
+    drawProposalOverlays(svg, root, 0, 0, width, height, CSS_VARS);
     vizEl.appendChild(wrap);
   }
 
@@ -524,6 +536,11 @@ function renderViz() {
   // clamped. The browser doesn't paint between this and the earlier DOM
   // mutations, so there's no visible flicker.
   if (vizWrap) vizWrap.scrollTop = savedScroll;
+
+  // Apply current selection (selected + dim classes) as a single post-pass.
+  // drawNode emits dim-filter only; selection state is layered on top so a
+  // click can update it cheaply without rebuilding the SVG.
+  applySelectionVisual();
 }
 
 function maxDepth(n) {
@@ -531,29 +548,30 @@ function maxDepth(n) {
   return 1 + Math.max(...n.children.map(maxDepth));
 }
 
-function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
+function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
   const padTop = depth === 0 ? 22 : 16;
   const pad = 2;
   const innerY = y + padTop;
   const innerH = Math.max(0, h - padTop - pad);
 
+  // Filter-based dim (tag-filter pill, search) is baked in here. Selection-
+  // based dim is applied separately by applySelectionVisual() so a click
+  // doesn't have to rebuild the SVG to update which blocks are dimmed.
   const dimByFilter = (STATE.tagFilter && !nodePassesTag(node, STATE.tagFilter))
                    || (STATE.searchRe && !(nodeMatches(node, STATE.searchRe).self || nodeMatches(node, STATE.searchRe).descendant));
   const inConflict = SERVER.conflicts.some(([a,b]) => a === node.cidr || b === node.cidr);
   const g = svg.append('g').attr('class', 'viz-block' +
     (node.kind === 'supernet'    ? ' is-supernet'    : '') +
     (node.kind === 'reservation' ? ' is-reservation' : '') +
-    (STATE.selectedCidr === node.cidr ? ' selected' : '') +
     (inConflict ? ' conflict' : '') +
-    (dimByFilter ? ' dim' :
-     (STATE.selectedCidr && STATE.selectedCidr !== node.cidr && !isSubnetOf(node.cidr, STATE.selectedCidr) && !isSubnetOf(STATE.selectedCidr, node.cidr) ? ' dim' : '')));
+    (dimByFilter ? ' dim-filter' : ''));
   g.attr('data-cidr', node.cidr);
 
-  const fill = node.kind === 'supernet'    ? getCss('--supernet')
-            : node.kind === 'reservation' ? getCss('--bg-3')
+  const fill = node.kind === 'supernet'    ? css.supernet
+            : node.kind === 'reservation' ? css.bg3
             : STATE.colorMode === 'tag'   ? primaryTagColor(effectiveTags(node))
             : STATE.colorMode === 'util'  ? utilColor(node)
-            :                               getCss('--used');
+            :                               css.used;
 
   g.append('rect')
     .attr('class', 'body')
@@ -562,7 +580,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
     .attr('height', Math.max(0, h - 2*pad))
     .attr('rx', 3)
     .attr('fill', fill)
-    .attr('stroke', node.kind === 'supernet' ? getCss('--line') : 'rgba(0,0,0,0.2)')
+    .attr('stroke', node.kind === 'supernet' ? css.line : 'rgba(0,0,0,0.2)')
     .attr('stroke-width', 1);
 
   if (w > 60) {
@@ -627,8 +645,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
     if (p.kind === 'free') {
       const fg = svg.append('g')
         .attr('class', 'viz-block is-free' +
-          (STATE.proposals && STATE.proposals.some(pp => pp.cidr === p.cidr) ? ' proposed' : '') +
-          (STATE.selectedCidr === p.cidr ? ' selected' : ''))
+          (STATE.proposals && STATE.proposals.some(pp => pp.cidr === p.cidr) ? ' proposed' : ''))
         .attr('data-cidr', p.cidr);
       fg.append('rect')
         .attr('class', 'body')
@@ -645,12 +662,12 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot) {
       }
       bindHoverFree(fg.node(), p, node);
     } else {
-      drawNode(svg, p.node, px, innerY, pw, innerH, depth + 1, supernetRoot);
+      drawNode(svg, p.node, px, innerY, pw, innerH, depth + 1, supernetRoot, css);
     }
   }
 }
 
-function drawProposalOverlays(svg, root, x, y, w, h) {
+function drawProposalOverlays(svg, root, x, y, w, h, css) {
   if (!STATE.proposals || !STATE.proposals.length) return;
   const rootInfo = cidrInfo(root.cidr);
   for (const p of STATE.proposals) {
@@ -701,7 +718,7 @@ function drawProposalOverlays(svg, root, x, y, w, h) {
     if (pw > 50) {
       og.append('text')
         .attr('x', px + 5).attr('y', innerY + 13)
-        .attr('fill', getCss('--acc'))
+        .attr('fill', css.acc)
         .attr('font-weight', '600')
         .text('▸ ' + p.cidr);
     }
@@ -719,13 +736,38 @@ function cidrLen(c) { return c.length * 6.6; }
 //==========================================================
 //  Selection + tooltips
 //==========================================================
+
+// Lightweight pass that toggles the `selected` and selection-driven `dim`
+// classes on existing tree rows and viz blocks — no full re-render. Called
+// from selectCidr (so a click is cheap on large plans) and once at the
+// end of every renderViz so freshly-built blocks pick up the current
+// selection state. dim-filter classes (set by drawNode based on tag /
+// search filters) are left alone; CSS treats either dim class as
+// equivalent.
+function applySelectionVisual() {
+  const sel = STATE.selectedCidr;
+  // Tree rows
+  for (const el of treeEl.querySelectorAll('.node')) {
+    el.classList.toggle('selected', el.dataset.cidr === sel);
+  }
+  // Viz blocks
+  for (const el of document.querySelectorAll('#viz .viz-block')) {
+    const cidr = el.getAttribute('data-cidr');
+    el.classList.toggle('selected', !!sel && cidr === sel);
+    const isLineage = !sel
+      || cidr === sel
+      || isSubnetOf(cidr, sel)
+      || isSubnetOf(sel, cidr);
+    el.classList.toggle('dim', !!sel && !isLineage);
+  }
+}
+
 function selectCidr(cidr) {
   STATE.selectedCidr = cidr;
   document.getElementById('statSel').textContent = `sel: ${cidr}`;
-  renderTree();
-  renderViz();
+  applySelectionVisual();
   const treeNode = treeEl.querySelector(`.node[data-cidr="${CSS.escape(cidr)}"]`);
-  if (treeNode) treeNode.scrollIntoView({block:'nearest'});
+  if (treeNode) treeNode.scrollIntoView({block: 'nearest'});
 }
 
 const tooltip = document.getElementById('tooltip');
