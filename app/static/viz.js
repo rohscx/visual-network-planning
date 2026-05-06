@@ -674,6 +674,21 @@ function drawProposalOverlays(svg, root, x, y, w, h, css) {
     if (!p.cidr) continue;
     const pi = cidrInfo(p.cidr);
     if (pi.start < rootInfo.start || pi.end > rootInfo.end) continue;
+
+    // If a viz block already exists at exactly this CIDR (e.g. the user
+    // clicked a free block — the proposal IS that block), just promote
+    // the existing element to .proposed instead of drawing a separate
+    // overlay. Avoids the doubled-up rectangle the user reported when a
+    // free block's natural-scale position drifts from the cursor-based
+    // position from drawNode's min-block-px redistribution.
+    const existing = svg.node().querySelector(
+      `.viz-block[data-cidr="${CSS.escape(p.cidr)}"]`
+    );
+    if (existing) {
+      existing.classList.add('proposed');
+      continue;
+    }
+
     let host = root, hostX = x, hostY = y, hostW = w, hostH = h;
     outer: while (true) {
       for (const c of host.children) {
