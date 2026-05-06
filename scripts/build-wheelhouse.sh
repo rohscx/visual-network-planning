@@ -72,7 +72,7 @@ done
 # pip resolves these to pure-Python "py3-none-any" wheels which work on
 # every target; pip on 3.11+ ignores them at install time anyway.
 for plat in "${PLATFORMS[@]}"; do
-  for pkg in tomli exceptiongroup; do
+  for pkg in tomli exceptiongroup typing-extensions; do
     echo "  · marker-gated ${pkg} for python 3.10 · ${plat}"
     "${PIP}" download \
       --quiet \
@@ -85,21 +85,22 @@ for plat in "${PLATFORMS[@]}"; do
   done
 done
 
-# Strip macOS extended attributes from the source tree *before* tarring.
-# This is the reliable fix: bsdtar's --no-mac-metadata and
-# COPYFILE_DISABLE only affect what tar adds during archive creation,
-# not xattrs already present on disk that get encoded as pax extended
-# headers. `xattr -cr` doesn't exist on Linux (no-op there).
-if command -v xattr >/dev/null 2>&1; then
-  xattr -cr "${WHEELHOUSE}" 2>/dev/null || true
-fi
-
 echo "→ Tarring → ${OUTPUT}"
-TAR_FLAGS=(-czf "${OUTPUT}" -C "${ROOT}")
-if tar --help 2>&1 | grep -q -- '--no-mac-metadata'; then
-  TAR_FLAGS+=(--no-mac-metadata)
-fi
-COPYFILE_DISABLE=1 tar "${TAR_FLAGS[@]}" wheelhouse
+# Build the tarball with Python's stdlib `tarfile` instead of bsdtar.
+# bsdtar on macOS encodes xattrs into pax extended headers no matter
+# what flag combo we throw at it (--no-mac-metadata, --no-xattrs,
+# COPYFILE_DISABLE=1, xattr -cr beforehand — all tested, all leaked
+# `LIBARCHIVE.xattr.com.apple.provenance` warnings into GNU tar on
+# Linux). Python's tarfile in default USTAR format simply doesn't
+# write xattrs, so the archive comes out clean.
+python3 - <<PYTAR
+import tarfile, os
+src = "${WHEELHOUSE}"
+dst = "${OUTPUT}"
+os.chdir("${ROOT}")
+with tarfile.open(dst, "w:gz", format=tarfile.USTAR_FORMAT) as tf:
+    tf.add("wheelhouse")
+PYTAR
 
 # Tarred — drop the loose wheelhouse so a Ctrl-C during a re-run can't
 # blend stale wheels with fresh ones.
