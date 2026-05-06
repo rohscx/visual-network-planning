@@ -750,8 +750,11 @@ function applySelectionVisual() {
   for (const el of treeEl.querySelectorAll('.node')) {
     el.classList.toggle('selected', el.dataset.cidr === sel);
   }
-  // Viz blocks
-  for (const el of document.querySelectorAll('#viz .viz-block')) {
+  // Viz blocks. Skip .proposed overlays — they have their own dashed-
+  // pulse treatment and sit on top of an existing free block with the
+  // same data-cidr, so without this exclusion clicking a free block
+  // would mark *both* the block and its proposal overlay as selected.
+  for (const el of document.querySelectorAll('#viz .viz-block:not(.proposed)')) {
     const cidr = el.getAttribute('data-cidr');
     el.classList.toggle('selected', !!sel && cidr === sel);
     const isLineage = !sel
@@ -1051,10 +1054,20 @@ function proposeForParent(parentCidr, mode, value, repeat = 1) {
 }
 
 function runPreview(forcedCidr, forcedParent) {
+  // Forced-cidr mode (free-block click): exactly one proposal at the
+  // clicked spot, regardless of stale repeat count or selected-parent
+  // set. Bypassing proposeForParent here also avoids the case where a
+  // previous "repeat: 4" carve session leaves N-1 extra proposals
+  // scattered around the same supernet.
   if (forcedCidr && forcedParent) {
     SELECTED_PARENTS.clear();
     SELECTED_PARENTS.add(forcedParent);
     populateParents();
+    const parentNode = TREE.items.find(i => i.cidr === forcedParent);
+    STATE.proposals = [{ parent: forcedParent, cidr: forcedCidr, parentNode }];
+    renderProposals();
+    renderViz();
+    return;
   }
 
   const mode = document.querySelector('#carveMode button[aria-pressed="true"]').dataset.mode;
@@ -1062,14 +1075,6 @@ function runPreview(forcedCidr, forcedParent) {
   const repeat = Math.max(1, Math.min(64, +document.getElementById('carveRepeat').value || 1));
 
   STATE.proposals = [...SELECTED_PARENTS].flatMap(p => proposeForParent(p, mode, value, repeat));
-
-  if (forcedCidr && forcedParent) {
-    const idx = STATE.proposals.findIndex(p => p.parent === forcedParent);
-    if (idx >= 0) {
-      const parentNode = TREE.items.find(i => i.cidr === forcedParent);
-      STATE.proposals[idx] = { parent: forcedParent, cidr: forcedCidr, parentNode };
-    }
-  }
 
   renderProposals();
   renderViz();
