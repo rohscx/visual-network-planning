@@ -5,9 +5,11 @@ import json
 import re
 from pathlib import Path
 
-from .models import Plan
+from .models import Allocation, Plan
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+KINDS = ("supernet", "allocation", "reservation")
 
 
 def safe_name(name: str) -> str:
@@ -80,6 +82,59 @@ def copy_plan(plans_dir: Path, src_name: str, dst_name: str) -> Plan:
     plan = load_plan(plans_dir, src_name)
     plan.name = dst_name
     save_plan(plans_dir, plan)
+    return plan
+
+
+def _bucket(plan: Plan, kind: str) -> list[Allocation]:
+    """Return the list inside `plan` that holds records of the given kind."""
+    if kind == "supernet":
+        return plan.supernets
+    if kind == "allocation":
+        return plan.allocations
+    if kind == "reservation":
+        return plan.reservations
+    raise ValueError(f"unknown kind: {kind!r}")
+
+
+def find_record_kind(plan: Plan, cidr: str) -> str | None:
+    """Return the kind of the record with `cidr` in `plan`, or None.
+
+    Searches supernets, allocations, then reservations — the same order the
+    /edit route uses. Doesn't validate that `cidr` only appears in one
+    bucket (find_conflicts handles that case as a duplicate).
+    """
+    for kind in KINDS:
+        if any(r.cidr == cidr for r in _bucket(plan, kind)):
+            return kind
+    return None
+
+
+def reclassify_record(plan: Plan, cidr: str, new_kind: str) -> Plan:
+    """Move the record with `cidr` from its current bucket into `new_kind`.
+
+    Same Allocation object — metadata (name, description, tags) is
+    preserved. Only the list membership changes. Caller persists with
+    save_plan() afterward.
+
+    Raises:
+      ValueError  — unknown `new_kind` or same-kind move (no-op).
+      KeyError    — `cidr` isn't present in any bucket.
+
+    Reclassification preserves the plan's CIDR set, so no overlap or
+    duplicate validation is needed: any conflict detectable afterward
+    was pre-existing.
+    """
+    if new_kind not in KINDS:
+        raise ValueError(f"unknown kind: {new_kind!r}")
+    current = find_record_kind(plan, cidr)
+    if current is None:
+        raise KeyError(f"{cidr} not in plan")
+    if current == new_kind:
+        raise ValueError(f"{cidr} is already a {new_kind}")
+    src = _bucket(plan, current)
+    rec = next(r for r in src if r.cidr == cidr)
+    src.remove(rec)
+    _bucket(plan, new_kind).append(rec)
     return plan
 
 

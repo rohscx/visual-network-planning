@@ -244,7 +244,15 @@
       </div>
       <div class="detail-body">
         <div class="detail-cidr" id="detailCidr" title="Click to copy">—</div>
-        <span class="detail-kind" id="detailKindBadge">allocation</span>
+        <div class="field" style="margin-top: 8px;">
+          <span class="lbl">type</span>
+          <div class="seg" id="detailKindSeg" role="tablist"
+               title="Reclassify this record into a different bucket. Same CIDR, same metadata, just moved.">
+            <button type="button" data-kind="supernet"    aria-pressed="false" style="flex:1">supernet</button>
+            <button type="button" data-kind="allocation"  aria-pressed="false" style="flex:1">allocation</button>
+            <button type="button" data-kind="reservation" aria-pressed="false" style="flex:1">reservation</button>
+          </div>
+        </div>
 
         <div class="detail-stats">
           <div class="detail-stat"><div class="k">size</div><div class="v" id="detailSize">—</div></div>

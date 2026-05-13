@@ -7,6 +7,7 @@ const PLAN_NAME = window.PLAN_NAME;
 const URL_PLAN   = `/plans/${encodeURIComponent(PLAN_NAME)}/plan.json`;
 const URL_ADD    = `/plans/${encodeURIComponent(PLAN_NAME)}/add`;
 const URL_EDIT   = `/plans/${encodeURIComponent(PLAN_NAME)}/edit`;
+const URL_RECLASSIFY = `/plans/${encodeURIComponent(PLAN_NAME)}/reclassify`;
 const URL_DELETE = `/plans/${encodeURIComponent(PLAN_NAME)}/delete`;
 const URL_CARVE  = `/plans/${encodeURIComponent(PLAN_NAME)}/commit_carve`;
 const URL_IMPORT = `/plans/${encodeURIComponent(PLAN_NAME)}/import_infoblox`;
@@ -1314,9 +1315,11 @@ function openDetail(cidr) {
   const used = usedAddresses(node), total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
   document.getElementById('detailKind').textContent = `${node.kind} detail`;
-  const kindBadge = document.getElementById('detailKindBadge');
-  kindBadge.textContent = node.kind;
-  kindBadge.className = 'detail-kind' + (node.kind === 'reservation' ? ' kind-reservation' : '');
+  // Sync the type segmented control to this record's current kind. saveDetail
+  // diffs current vs displayed kind to decide whether to call /reclassify.
+  for (const b of document.querySelectorAll('#detailKindSeg button')) {
+    b.setAttribute('aria-pressed', b.dataset.kind === node.kind ? 'true' : 'false');
+  }
   const detailCidrEl = document.getElementById('detailCidr');
   detailCidrEl.textContent = node.cidr;
   detailCidrEl.dataset.copy = node.cidr;
@@ -1345,11 +1348,34 @@ async function saveDetail() {
   const name = document.getElementById('detailName').value.trim();
   const desc = document.getElementById('detailDesc').value.trim();
   const tags = document.getElementById('detailTags').value;
+  const newKind = document
+    .querySelector('#detailKindSeg button[aria-pressed="true"]')
+    ?.dataset.kind;
+  const currentKind = nodeOf(cidr)?.kind;
+
+  // Reclassify first when the type changed, so /edit then runs against
+  // the record in its final bucket. Skipped entirely when the kind is
+  // unchanged — saving common edits costs the same one POST as before.
+  if (newKind && newKind !== currentKind) {
+    const r = await postJSON(URL_RECLASSIFY, { cidr, new_kind: newKind });
+    if (!r.ok) { toast(r.data.error || 'reclassify failed', 'err'); return; }
+  }
   const { ok, data } = await postJSON(URL_EDIT, { cidr, name, description: desc, tags });
   if (!ok) { toast(data.error || 'save failed', 'err'); return; }
   toast(`saved ${cidr}`, 'ok');
   closeDetail();
   await refresh();
+}
+
+// Make the type seg behave like the other segmented controls (single
+// active pressed state). saveDetail reads aria-pressed to determine
+// the user's choice.
+for (const b of document.querySelectorAll('#detailKindSeg button')) {
+  b.addEventListener('click', () => {
+    for (const x of document.querySelectorAll('#detailKindSeg button')) {
+      x.setAttribute('aria-pressed', x === b ? 'true' : 'false');
+    }
+  });
 }
 
 //==========================================================

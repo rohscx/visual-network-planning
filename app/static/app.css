@@ -369,7 +369,6 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--warn);
   border-color: color-mix(in oklab, var(--warn), transparent 70%);
 }
-.detail-kind.kind-reservation { color: var(--warn); border-color: color-mix(in oklab, var(--warn), transparent 60%); }
 
 /* ---- Tooltip ---- */
 .tooltip {
@@ -993,19 +992,6 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--acc);
   margin-bottom: 4px;
   cursor: copy;
-}
-.detail-kind {
-  display: inline-block;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--fg-3);
-  padding: 1px 6px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  margin-bottom: 14px;
 }
 .detail-stats {
   display: grid;

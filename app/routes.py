@@ -263,6 +263,25 @@ def edit_record(name: str):
     return jsonify(ok=True)
 
 
+@bp.post("/plans/<name>/reclassify")
+def reclassify_record(name: str):
+    """Move an existing record between supernet / allocation / reservation
+    buckets. Sibling to /edit so each route handles one concern."""
+    plan = _load_or_404(name)
+    p = _params()
+    cidr = (p.get("cidr") or "").strip()
+    new_kind = (p.get("new_kind") or "").strip()
+    try:
+        storage.reclassify_record(plan, cidr, new_kind)
+    except KeyError as e:
+        # str(KeyError("msg")) wraps in quotes; .args[0] gets the raw message.
+        return jsonify(ok=False, error=e.args[0]), 400
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    storage.save_plan(_plans_dir(), plan)
+    return jsonify(ok=True)
+
+
 @bp.post("/plans/<name>/delete")
 def delete_record(name: str):
     plan = _load_or_404(name)
