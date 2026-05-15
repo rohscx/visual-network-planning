@@ -13,6 +13,12 @@ from .models import Allocation
 bp = Blueprint("main", __name__)
 
 
+# Generous request-size caps so a malformed client can't lock the request
+# thread in a validation loop. Both are well above any normal workload.
+_MAX_COMMIT_ALLOCS = 256        # multi-parent carve × repeat
+_MAX_IMPORT_ROWS   = 10_000     # Infoblox CSV row count after parse
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -321,6 +327,15 @@ def commit_carve(name: str):
     items = p.get("allocations") or []
     if not isinstance(items, list) or not items:
         return jsonify(ok=False, error="no allocations to commit"), 400
+    # Bound the request so a malformed client (or a bored DevTools user)
+    # can't push thousands of validation passes through a single request.
+    # Normal carve sessions never approach this — the user's biggest
+    # multi-parent carve so far was 49 parents × 1 repeat.
+    if len(items) > _MAX_COMMIT_ALLOCS:
+        return jsonify(
+            ok=False,
+            error=f"too many allocations ({len(items)}); cap is {_MAX_COMMIT_ALLOCS}",
+        ), 400
 
     committed = []
     rejected = []
@@ -364,6 +379,18 @@ def import_infoblox(name: str):
         return jsonify(ok=False, error=f"could not read upload: {e}"), 400
 
     result = infoblox.parse_infoblox_csv(text)
+
+    # Bound the import. A 16 MB cap on the upload size already lives in
+    # app/__init__.py, but a small file can still expand into a huge row
+    # count if it's pure data with short fields. This guards the
+    # downstream validation loop.
+    total_rows = len(result["supernets"]) + len(result["allocations"])
+    if total_rows > _MAX_IMPORT_ROWS:
+        return jsonify(
+            ok=False,
+            error=(f"import has {total_rows} rows; cap is {_MAX_IMPORT_ROWS}. "
+                   "Split the file or raise _MAX_IMPORT_ROWS in app/routes.py."),
+        ), 400
 
     added_super = added_alloc = skipped_dup = 0
     rejected: list[dict] = []

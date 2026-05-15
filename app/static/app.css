@@ -195,7 +195,14 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 10px;
   font-family: "JetBrains Mono", monospace;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: color .12s, background .12s;
 }
+/* Leaf rows aren't expandable — the dot is purely decorative. */
+.node[data-leaf="true"] > .row .twist { cursor: default; }
+.node:hover > .row .twist { color: var(--fg-1); }
+.node > .row .twist:hover { color: var(--acc); background: var(--bg-3); }
 .node[data-collapsed="true"] > .children { display: none; }
 .node[data-collapsed="true"] > .row .twist::before { content: "▸"; }
 .node[data-collapsed="false"] > .row .twist::before { content: "▾"; }
@@ -362,7 +369,17 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .viz-block.is-reservation:hover rect.body,
 .viz-block.is-reservation.hover rect.body { fill: var(--bg-2); }
-.viz-block.is-reservation text { fill: var(--warn); }
+/* Warn-yellow on dark gray at 10-11px sits right on the WCAG AA edge —
+   bump font weight and apply a subtle text shadow so the glyphs read
+   crisp without changing the brand color. */
+.viz-block.is-reservation text {
+  fill: var(--warn);
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
 
 .node.is-reservation .cidr { color: var(--warn); }
 .node.is-reservation .pct {
@@ -423,16 +440,30 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .tag.clickable { cursor: pointer; }
 .tag.clickable:hover { border-color: var(--acc); color: var(--fg); }
 
-/* Inherited tags appear in tooltips dimmed and dashed-bordered so the
-   user can tell them apart from a record's own tags at a glance. */
+/* Inherited tags (in viz tooltips, tree-row chips, etc.) read as
+   "this came from a parent." Earlier this used dashed border + low
+   opacity, which at 10px just looked like "faded chips." Replace with
+   a clearer affordance: a chevron-up glyph in the accent color and a
+   subtler background tint so they cluster visually but stay legible. */
 .tag.inherited {
-  opacity: 0.7;
-  border-style: dashed;
+  background: color-mix(in oklab, var(--bg-3), var(--bg-2) 50%);
+  color: var(--fg-2);
+  border-color: color-mix(in oklab, var(--line), transparent 30%);
 }
 .tag.inherited::before {
-  content: "↑ ";
-  opacity: 0.7;
+  content: "↑";
+  color: var(--acc);
+  font-weight: 700;
+  margin-right: 4px;
+  font-size: 10px;
+}
+.tooltip .tip-tags .tip-tags-divider {
+  width: 100%;
   font-size: 9px;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
 }
 
 /* ---- Right rail: command panel ---- */
@@ -505,6 +536,23 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   box-shadow: 0 0 0 1px var(--acc) inset;
 }
 .field input::placeholder { color: var(--fg-3); }
+/* Server rejected the value (overlap, dup, malformed CIDR). User starts
+   typing → JS strips the class on `input`. */
+.field input.field-error {
+  border-color: var(--err);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--err), transparent 70%) inset;
+}
+.field input.field-error:focus {
+  border-color: var(--err);
+  box-shadow: 0 0 0 1px var(--err) inset;
+}
+/* Keyboard users get a strong visible focus ring on every form input.
+   :focus-visible scopes this to keyboard navigation so mouse clicks don't
+   leave a stray ring behind. */
+.field input:focus-visible, .field select:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--acc), transparent 40%);
+  outline-offset: 1px;
+}
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 .parent-picker {
@@ -650,6 +698,23 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   background: var(--warn);   color: #0b0d10; border-color: var(--warn);
 }
 
+/* Cap the proposals list so multi-parent carves with many proposals
+   don't push the commit/preview buttons below the rail's scroll
+   horizon. The buttons sit in the parent .commit-row right below this. */
+.proposals-list {
+  margin-top: 12px;
+  max-height: 50vh;
+  overflow-y: auto;
+  /* Hint that the panel is scrollable when it overflows. */
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+}
+.proposals-list:not(:empty) {
+  border-top-color: color-mix(in oklab, var(--line), transparent 40%);
+  border-bottom-color: color-mix(in oklab, var(--line), transparent 40%);
+  padding: 6px 0;
+}
+
 .proposal {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -778,15 +843,30 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .plan-table .row-actions {
   white-space: nowrap;
   text-align: right;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
 }
 .plan-table button.linkdel,
 .plan-table button.linkact {
-  background: transparent; border: none; color: var(--fg-3);
-  cursor: pointer; font-size: 14px; padding: 0 4px;
+  background: transparent; border: 1px solid transparent;
+  color: var(--fg-3);
+  cursor: pointer; font-size: 13px;
+  padding: 2px 7px; min-width: 26px;
+  border-radius: 3px;
   font-family: inherit;
+  transition: color .12s, background .12s, border-color .12s;
 }
-.plan-table button.linkdel:hover { color: var(--err); }
-.plan-table button.linkact:hover { color: var(--acc); }
+.plan-table button.linkdel:hover {
+  color: var(--err);
+  background: color-mix(in oklab, var(--err), transparent 86%);
+  border-color: color-mix(in oklab, var(--err), transparent 60%);
+}
+.plan-table button.linkact:hover {
+  color: var(--acc);
+  background: color-mix(in oklab, var(--acc), transparent 88%);
+  border-color: color-mix(in oklab, var(--acc), transparent 60%);
+}
 
 /* ---- Banner ---- */
 .banner {
@@ -798,7 +878,22 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--warn);
 }
 .banner.err { background: color-mix(in oklab, var(--err), var(--bg) 82%); color: var(--err); }
-.banner a { color: inherit; text-decoration: underline dotted; margin-right: 8px; }
+.banner a {
+  color: inherit;
+  font-family: "JetBrains Mono", monospace;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+  margin-right: 8px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  transition: background .12s;
+}
+.banner a:hover {
+  background: color-mix(in oklab, currentColor, transparent 88%);
+  text-decoration-thickness: 2px;
+}
 
 /* ---- Status footer ---- */
 .statusbar {
