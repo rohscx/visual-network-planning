@@ -66,7 +66,12 @@ function buildTree(plan) {
   }
   for (const it of items) computeFree(it);
   for (const it of items) it.children.sort((a,b)=>a.start-b.start);
-  return { roots, items };
+  // Cidr → item map. Used by nodeOf / parentOf — without this they walk
+  // items linearly and any caller that loops over matches (e.g. the
+  // search "copy all" handler) sits at O(N²).
+  const byCidr = new Map();
+  for (const it of items) byCidr.set(it.cidr, it);
+  return { roots, items, byCidr };
 }
 function computeFree(parent) {
   // A leaf allocation or reservation is fully consumed by itself — its
@@ -172,7 +177,7 @@ function getCss(v) { return getComputedStyle(document.documentElement).getProper
 //==========================================================
 let PLAN = { name: PLAN_NAME, supernets: [], allocations: [], reservations: [] };
 let SERVER = { conflicts: [], orphans: [] };
-let TREE = { roots: [], items: [] };
+let TREE = { roots: [], items: [], byCidr: new Map() };
 const STATE = {
   selectedCidr: null,
   hoveredCidr:  null,
@@ -210,6 +215,13 @@ async function fetchPlan() {
 
 async function refresh() {
   await fetchPlan();
+  // If the detail panel is open on a record that just disappeared (the
+  // user deleted it from another tab, or reclassified to a different
+  // bucket / state that drops it from TREE.items), close the slide-over
+  // before the next interaction tries to save a stale CIDR.
+  if (STATE.detailCidr && !TREE.items.some(it => it.cidr === STATE.detailCidr)) {
+    closeDetail();
+  }
   populateParentTagFilter();   // tag list depends on plan data
   populateParents();
   renderTree();
@@ -297,12 +309,10 @@ function toast(msg, kind='ok') {
   clearTimeout(__toastTimer);
   __toastTimer = setTimeout(() => el.classList.remove('on'), 1800);
 }
-function nodeOf(cidr) { return TREE.items.find(i => i.cidr === cidr); }
+function nodeOf(cidr) { return TREE.byCidr ? TREE.byCidr.get(cidr) : TREE.items.find(i => i.cidr === cidr); }
 function parentOf(cidr) {
-  for (const it of TREE.items) {
-    if ((it.children||[]).some(c => c.cidr === cidr)) return it;
-  }
-  return null;
+  const it = nodeOf(cidr);
+  return it ? (it._parent || null) : null;
 }
 
 // Hovering a tree row should glow the matching viz block. Listeners go on
@@ -358,6 +368,11 @@ function renderNode(node, isRoot) {
   row.className = 'row';
   const matchedName = highlightMatch(node.name || '', STATE.searchRe);
   const matchedCidr = highlightMatch(node.cidr, STATE.searchRe);
+  // Native browser tooltip surfaces the full text when the name (or CIDR
+  // in a narrow sidebar) gets ellipsized by overflow. Skip on rows with
+  // no name to avoid an empty-quote popup.
+  const rowTooltip = node.name ? `${node.cidr} — ${node.name}` : node.cidr;
+  row.title = rowTooltip;
   row.innerHTML = `
     <span class="twist"></span>
     <span style="display:flex; align-items:center; min-width:0; gap:0;">
@@ -827,11 +842,18 @@ function tooltipForNode(node) {
   const ownChips = (node.tags || []).map(t =>
     `<span class="tag clickable" data-tag="${t}" title="Click to filter by ${t}"><span class="dot" style="background:${tagColor(t)}"></span>${t}</span>`
   ).join('');
-  const inheritedChips = inheritedTags(node).map(t =>
+  const inherited = inheritedTags(node);
+  const inheritedChips = inherited.map(t =>
     `<span class="tag clickable inherited" data-tag="${t}" title="Inherited from a parent · click to filter"><span class="dot" style="background:${tagColor(t)}"></span>${t}</span>`
   ).join('');
+  // When both kinds are present, insert a tiny "inherited" label so the
+  // ↑-prefixed chips read as a labelled group rather than just "faded
+  // chips at the end."
+  const inheritedDivider = (ownChips && inheritedChips)
+    ? '<span class="tip-tags-divider">inherited</span>'
+    : '';
   const tagBlock = (ownChips || inheritedChips)
-    ? `<div class="tip-tags">${ownChips}${inheritedChips}</div>`
+    ? `<div class="tip-tags">${ownChips}${inheritedDivider}${inheritedChips}</div>`
     : '';
   const usedRow = node.kind === 'reservation'
     ? `<span class="k">status</span><span class="v" style="color:var(--warn)">reserved · excluded from carve</span>`
@@ -1217,6 +1239,8 @@ function renderProposals() {
 }
 
 async function commitCarve() {
+  const btn = document.getElementById('carveCommitBtn');
+  if (btn.disabled) return;   // already in-flight, or no proposals (renderProposals disabled it)
   const ok = STATE.proposals.filter(p => p.cidr);
   if (!ok.length) return;
   const tmpl = document.getElementById('carveName').value || '';
@@ -1232,6 +1256,7 @@ async function commitCarve() {
     };
   });
 
+  btn.disabled = true;   // hold the lock across the round-trip
   try {
     const r = await fetch(URL_CARVE, {
       method: 'POST',
@@ -1244,12 +1269,17 @@ async function commitCarve() {
       toast(`committed ${n} carve${n===1?'':'s'}`, 'ok');
       STATE.proposals = [];
       STATE.selectedCidr = (data.committed || [])[0] || null;
+      // refresh() rebuilds + renderProposals re-disables the button
+      // (proposals are now empty) — so we deliberately *don't* re-enable
+      // in a finally.
       await refresh();
     } else {
       toast(`commit failed: ${data.error || 'unknown'}`, 'err');
+      btn.disabled = false;   // proposals remain — let the user retry
     }
   } catch (e) {
     toast(`commit failed: ${e}`, 'err');
+    btn.disabled = false;
   }
 }
 
@@ -1267,17 +1297,42 @@ async function postJSON(url, body) {
   return { ok: r.ok && data.ok !== false, data };
 }
 
+// Run `fn` with `btn` disabled, restoring on completion. Bails out
+// immediately if the button is already disabled — protects every
+// async POST handler from rapid double-clicks producing two requests.
+async function withButtonLock(btn, fn) {
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try { return await fn(); }
+  finally { btn.disabled = false; }
+}
+
 async function addRecord() {
+  const cidrInput = document.getElementById('addCidr');
+  // Clear any previous error highlight before the next round-trip.
+  cidrInput.classList.remove('field-error');
   const kind = document.querySelector('[data-add-kind][aria-pressed="true"]').dataset.addKind;
-  const cidr = document.getElementById('addCidr').value.trim();
+  const cidr = cidrInput.value.trim();
   const name = document.getElementById('addName').value.trim();
   const desc = document.getElementById('addDesc').value.trim();
   const tags = document.getElementById('addTags').value;
-  if (!cidr) { toast('cidr is required', 'err'); return; }
+  if (!cidr) {
+    cidrInput.classList.add('field-error');
+    cidrInput.focus();
+    toast('cidr is required', 'err');
+    return;
+  }
   const { ok, data } = await postJSON(URL_ADD, { kind, cidr, name, description: desc, tags });
-  if (!ok) { toast(data.error || 'add failed', 'err'); return; }
+  if (!ok) {
+    // Server rejected — almost always a CIDR problem (invalid, dup, overlap).
+    cidrInput.classList.add('field-error');
+    cidrInput.focus();
+    cidrInput.select();
+    toast(data.error || 'add failed', 'err');
+    return;
+  }
   toast(`added ${cidr}`, 'ok');
-  document.getElementById('addCidr').value = '';
+  cidrInput.value = '';
   document.getElementById('addName').value = '';
   document.getElementById('addDesc').value = '';
   document.getElementById('addTags').value = '';
@@ -1311,6 +1366,13 @@ const detail = document.getElementById('detail');
 function openDetail(cidr) {
   const node = nodeOf(cidr);
   if (!node) return;
+  // If the panel is already open on a *different* cidr, drop the `on`
+  // class briefly so the slide-in transition replays for the new
+  // content. The final add('on') below is deferred via rAF in that
+  // case; same-cidr re-clicks paint synchronously with no bounce.
+  const wasOpen = detail.classList.contains('on');
+  const needsReplay = wasOpen && STATE.detailCidr !== cidr;
+  if (needsReplay) detail.classList.remove('on');
   STATE.detailCidr = cidr;
   const used = usedAddresses(node), total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
@@ -1335,8 +1397,15 @@ function openDetail(cidr) {
   document.getElementById('detailName').value = node.name || '';
   document.getElementById('detailDesc').value = node.description || '';
   document.getElementById('detailTags').value = (node.tags||[]).join(', ');
-  detail.classList.add('on');
   detail.setAttribute('aria-hidden', 'false');
+  // When replaying the transition, defer the `on` flip to the next frame
+  // so the browser actually animates the off→on change. Otherwise both
+  // states land in the same paint and the slide-in is skipped.
+  if (needsReplay) {
+    requestAnimationFrame(() => detail.classList.add('on'));
+  } else {
+    detail.classList.add('on');
+  }
 }
 function closeDetail() {
   detail.classList.remove('on');
@@ -1539,13 +1608,20 @@ document.getElementById('carveName').addEventListener('input', () => {
   if (STATE.proposals.length) renderProposals();
 });
 
-document.getElementById('addSubmit').addEventListener('click', addRecord);
+document.getElementById('addSubmit').addEventListener('click', (e) =>
+  withButtonLock(e.currentTarget, addRecord));
 document.getElementById('addReset').addEventListener('click', resetAdd);
+// Drop the field-error highlight as soon as the user starts editing the
+// offending field — they've acknowledged the error, no point keeping the
+// red border.
+document.getElementById('addCidr').addEventListener('input', (e) =>
+  e.currentTarget.classList.remove('field-error'));
 
 document.getElementById('detailClose').addEventListener('click', closeDetail);
 document.getElementById('detailCancel').addEventListener('click', closeDetail);
 document.getElementById('detailCidr').addEventListener('click', () => copyText(document.getElementById('detailCidr').textContent));
-document.getElementById('detailSave').addEventListener('click', saveDetail);
+document.getElementById('detailSave').addEventListener('click', (e) =>
+  withButtonLock(e.currentTarget, saveDetail));
 document.getElementById('detailDelete').addEventListener('click', () => {
   const cidr = STATE.detailCidr; if (!cidr) return;
   closeDetail();

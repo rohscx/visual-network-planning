@@ -57,7 +57,14 @@
       </tbody>
     </table>
   {% else %}
-    <p style="color: var(--fg-2); padding: 16px 0;">No plans yet. Create one below.</p>
+    {# Empty state — mirror the viz empty state's glyph + heading +
+       body pattern so the two landing surfaces feel like the same app. #}
+    <div class="empty">
+      <div class="glyph-big" aria-hidden="true">{% for _ in range(16) %}<i></i>{% endfor %}</div>
+      <h2>no plans yet</h2>
+      <p>Each plan is a <code>plans/&lt;name&gt;.json</code> on disk — diff-friendly, intentionally local. Pick a name below to make your first one.</p>
+      <button type="button" class="btn primary" id="indexEmptyFocus">+ start a plan</button>
+    </div>
   {% endif %}
 
   <h3 style="font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--fg-2); margin: 28px 0 8px;">new plan</h3>
@@ -77,6 +84,13 @@
 
 {% block scripts %}
 <script>
+  // Empty-state "start a plan" button focuses the name input below.
+  document.getElementById('indexEmptyFocus')?.addEventListener('click', () => {
+    const input = document.querySelector('form[action$="/plans"] input[name="name"]');
+    input?.focus();
+    input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
   // Copy / rename use the same flow: prompt for a new name, then submit a
   // small auto-built form to the right endpoint. The browser does the
   // POST + redirect; the server validates the new name and updates the
