@@ -15,10 +15,14 @@ your own private repo.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python run.py
+python3 run.py
 ```
 
 Opens `http://127.0.0.1:5050` in your browser.
+
+> Use `python3`, not `python`. On stock Ubuntu / Debian / WSL the bare
+> `python` command isn't linked by default (it lives in the
+> `python-is-python3` package). `python3` works everywhere.
 
 ## Offline / air-gapped install
 
@@ -32,12 +36,16 @@ ones once, plus MarkupSafe's compiled wheels for **macOS arm64** and
 ```bash
 tar -xzf vnp-deps.tar.gz
 python3 -m venv .venv
-.venv/bin/pip install --no-index --find-links wheelhouse/ -r requirements.txt
-python run.py
+source .venv/bin/activate
+pip install --no-index --find-links wheelhouse/ -r requirements.txt
+python3 run.py
 ```
 
 The `--no-index` flag tells pip not to try PyPI, so the install stays
-fully offline.
+fully offline. The `source .venv/bin/activate` step matters: without
+it, a bare `python3 run.py` resolves to your **system** Python (which
+doesn't have Flask installed), even if your shell prompt suggests the
+venv is active from an earlier session.
 
 To rebuild the bundle (e.g. after editing `requirements.txt`, or to
 target a different platform / Python version), run
