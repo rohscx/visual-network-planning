@@ -98,6 +98,89 @@ def test_build_tree_identifies_orphans():
 
 # --- conflicts / orphans -----------------------------------------------------
 
+def test_find_conflicts_detects_duplicate_across_buckets():
+    # Same CIDR present as an allocation AND a reservation — the realistic
+    # duplicate case now that reclassify exists (a crash mid-reclassify or
+    # a hand-edit could leave both).
+    plan = Plan(
+        name="t",
+        supernets=[Allocation(cidr="10.0.0.0/16", name="")],
+        allocations=[Allocation(cidr="10.0.1.0/24", name="a")],
+        reservations=[Allocation(cidr="10.0.1.0/24", name="r")],
+    )
+    assert ("10.0.1.0/24", "10.0.1.0/24") in find_conflicts(plan)
+
+
+def test_find_conflicts_detects_normalized_duplicate():
+    # "10.0.1.1/24" (host bits set, e.g. hand-edited JSON) normalizes to
+    # 10.0.1.0/24 on parse — must be flagged as a duplicate of the aligned
+    # entry even though the strings differ.
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "")],
+        allocations=[("10.0.1.0/24", "a"), ("10.0.1.1/24", "b")],
+    )
+    assert len(find_conflicts(plan)) == 1
+
+
+def test_build_tree_children_sorted_by_address():
+    # Children must come back ordered by network address regardless of
+    # insertion order in the plan file.
+    plan = _plan(
+        supernets=[("10.0.0.0/16", "")],
+        allocations=[("10.0.3.0/24", "c"), ("10.0.1.0/24", "a"), ("10.0.2.0/24", "b")],
+    )
+    tree = build_tree(plan)
+    childs = [c["cidr"] for c in tree["roots"][0]["children"]]
+    assert childs == ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+
+
+def test_build_tree_duplicate_nets_are_siblings():
+    # Two entries with the same CIDR: neither may become the other's
+    # parent — both hang off the enclosing supernet.
+    plan = Plan(
+        name="t",
+        supernets=[Allocation(cidr="10.0.0.0/16", name="")],
+        allocations=[Allocation(cidr="10.0.1.0/24", name="a")],
+        reservations=[Allocation(cidr="10.0.1.0/24", name="r")],
+    )
+    tree = build_tree(plan)
+    root = tree["roots"][0]
+    assert len(root["children"]) == 2
+    assert all(c["cidr"] == "10.0.1.0/24" for c in root["children"])
+    assert all(c["children"] == [] for c in root["children"])
+    assert tree["orphans"] == []
+
+
+def test_build_tree_deep_nesting_chain():
+    # /8 ⊃ /16 ⊃ /24 ⊃ /28 — each level must parent to its immediate
+    # container, not skip levels.
+    plan = _plan(
+        supernets=[("10.0.0.0/8", "")],
+        allocations=[("10.1.0.0/16", ""), ("10.1.2.0/24", ""), ("10.1.2.16/28", "")],
+    )
+    tree = build_tree(plan)
+    lvl = tree["roots"][0]
+    for expected in ("10.1.0.0/16", "10.1.2.0/24", "10.1.2.16/28"):
+        assert len(lvl["children"]) == 1
+        lvl = lvl["children"][0]
+        assert lvl["cidr"] == expected
+    assert lvl["children"] == []
+
+
+def test_build_tree_adjacent_supernets_stay_separate_roots():
+    # 10.0.0.0/16 and 10.1.0.0/16 are adjacent (contiguous address space)
+    # but neither contains the other — the sweep must not chain them.
+    plan = _plan(
+        supernets=[("10.1.0.0/16", "b"), ("10.0.0.0/16", "a")],
+        allocations=[("10.1.5.0/24", "in-b")],
+    )
+    tree = build_tree(plan)
+    roots = [r["cidr"] for r in tree["roots"]]
+    assert roots == ["10.0.0.0/16", "10.1.0.0/16"]
+    assert [c["cidr"] for c in tree["roots"][1]["children"]] == ["10.1.5.0/24"]
+    assert tree["roots"][0]["children"] == []
+
+
 def test_find_conflicts_detects_duplicate():
     plan = _plan(
         supernets=[("10.0.0.0/16", "")],

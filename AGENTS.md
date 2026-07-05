@@ -53,11 +53,18 @@ makes the unit tests fast and honest — keep it that way.
   It rejects misaligned CIDRs like `10.0.0.128/23` with host bits set, which
   Python's `ipaddress` would otherwise silently normalize.
 - Aligned CIDRs can only be *disjoint* or in a *containment* relationship —
-  partial overlaps are mathematically impossible. The `find_conflicts` code
-  still checks for them as a defensive belt-and-suspenders against
-  hand-edited JSON, but don't expect to see one in normal use.
-- Duplicate detection (two entries with the same CIDR) *is* a real runtime
-  case and must stay covered.
+  partial overlaps are mathematically impossible. And since `planning.parse()`
+  normalizes host bits (`strict=False`), even hand-edited misaligned JSON
+  becomes aligned on load. `find_conflicts` therefore only detects
+  *duplicates after normalization* (same parsed network from two entries) —
+  there is no partial-overlap branch because none is reachable.
+- Duplicate detection (two entries resolving to the same network, possibly
+  across buckets) *is* a real runtime case and must stay covered.
+- `planning.parse()` is `lru_cache`d — it must stay a pure function of its
+  string argument, and `IPv4Network` results must never be mutated.
+- `build_tree` assigns parents with a sorted containment sweep (O(N log N)),
+  relying on the laminar-family property of aligned CIDRs. If you ever relax
+  the alignment guarantee, that sweep's correctness argument goes with it.
 
 ## Three entry types
 

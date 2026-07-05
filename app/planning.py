@@ -7,6 +7,7 @@ layer is a thin wrapper that loads a Plan, calls these, and saves it back.
 from __future__ import annotations
 
 import ipaddress
+from functools import lru_cache
 from typing import Iterable
 
 from .models import Allocation, Plan
@@ -14,7 +15,15 @@ from .models import Allocation, Plan
 IPv4Net = ipaddress.IPv4Network
 
 
+@lru_cache(maxsize=65536)
 def parse(cidr: str) -> IPv4Net:
+    """Parse a CIDR, normalizing host bits (strict=False).
+
+    Cached: the same few hundred plan CIDRs get re-parsed by every
+    build_tree / find_conflicts / validate_new_allocation call, and
+    IPv4Network construction is the single hottest operation in profile.
+    IPv4Network is immutable, so sharing instances across callers is safe.
+    """
     return ipaddress.IPv4Network(cidr, strict=False)
 
 
@@ -86,31 +95,48 @@ def build_tree(plan: Plan) -> dict:
     reservs = [(r, parse(r.cidr), "reservation") for r in plan.reservations]
     all_nodes = supernets + allocs + reservs
 
-    parent_of: list[int | None] = [None] * len(all_nodes)
-    for i, (_, net_i, _) in enumerate(all_nodes):
-        best_parent: int | None = None
-        best_prefix = -1
-        for j, (_, net_j, _) in enumerate(all_nodes):
-            if i == j:
-                continue
-            if net_i != net_j and net_i.subnet_of(net_j):
-                if net_j.prefixlen > best_prefix:
-                    best_parent = j
-                    best_prefix = net_j.prefixlen
-        parent_of[i] = best_parent
+    # Parent assignment via a sorted containment sweep — O(N log N) rather
+    # than the naive all-pairs subnet_of scan (O(N²), ~460k calls at 700
+    # nodes, which dominated every plan.json fetch).
+    #
+    # Aligned CIDRs form a laminar family: sorted by (network address,
+    # prefixlen), a block's deepest container is always on a stack of
+    # currently-open enclosing blocks. Identical nets (duplicates) sort
+    # adjacent; neither may parent the other, so the parent walk skips
+    # stack entries with the same extent.
+    starts = [int(net.network_address) for _, net, _ in all_nodes]
+    ends = [int(net.broadcast_address) for _, net, _ in all_nodes]
+    order = sorted(range(len(all_nodes)), key=lambda i: (starts[i], all_nodes[i][1].prefixlen))
 
+    parent_of: list[int | None] = [None] * len(all_nodes)
+    stack: list[int] = []  # indices of open blocks, outermost → innermost
+    for i in order:
+        while stack and ends[i] > ends[stack[-1]]:
+            stack.pop()
+        # Deepest strict container: skip equal-extent entries (duplicates).
+        parent = None
+        for k in range(len(stack) - 1, -1, -1):
+            j = stack[k]
+            if starts[j] == starts[i] and ends[j] == ends[i]:
+                continue
+            parent = j
+            break
+        parent_of[i] = parent
+        stack.append(i)
+
+    # Children accumulate in sweep order, which IS (address, prefixlen)
+    # order — no per-node re-sort (the old code re-parsed every child's
+    # CIDR string twice inside the sort key).
     children_of: list[list[int]] = [[] for _ in all_nodes]
-    for i, p in enumerate(parent_of):
+    for i in order:
+        p = parent_of[i]
         if p is not None:
             children_of[p].append(i)
 
     def make_node(i: int) -> dict:
         rec, net, kind = all_nodes[i]
         direct_nets = [all_nodes[c][1] for c in children_of[i]]
-        children = sorted(
-            (make_node(c) for c in children_of[i]),
-            key=lambda n: (int(parse(n["cidr"]).network_address), parse(n["cidr"]).prefixlen),
-        )
+        children = [make_node(c) for c in children_of[i]]
         free = _free_space(net, direct_nets)
         used_addresses = sum(c.num_addresses for c in direct_nets)
         return {
@@ -127,13 +153,14 @@ def build_tree(plan: Plan) -> dict:
             "used_addresses": used_addresses,
         }
 
+    # Iterating `order` keeps roots in (address, prefixlen) order for free.
     roots = [
         make_node(i)
-        for i, (_, _, kind) in enumerate(all_nodes)
-        if kind == "supernet" and parent_of[i] is None
+        for i in order
+        if all_nodes[i][2] == "supernet" and parent_of[i] is None
     ]
-    roots.sort(key=lambda n: (int(parse(n["cidr"]).network_address), parse(n["cidr"]).prefixlen))
 
+    # Orphans keep original plan-file order (allocations then reservations).
     orphans = [
         all_nodes[i][0].to_dict()
         for i, (_, _, kind) in enumerate(all_nodes)
@@ -150,17 +177,27 @@ def _all_owned_pairs(plan: Plan):
 
 
 def find_conflicts(plan: Plan) -> list[tuple[str, str]]:
-    """Pairs of CIDRs that partially overlap (neither is subnet_of the other)."""
-    items = _all_owned_pairs(plan)
+    """Pairs of CIDRs that resolve to the same network (exact duplicates).
+
+    Partial overlaps cannot occur here: parse() normalizes every CIDR to
+    an aligned network (host bits cleared), and two aligned networks are
+    always either disjoint or nested — so after normalization the only
+    reachable conflict is two entries resolving to the same network
+    (e.g. the same CIDR present in two buckets, or "10.0.0.0/24" and a
+    hand-edited "10.0.0.1/24" that normalizes to it). Grouping by parsed
+    network finds those in O(N) instead of the old O(N²) pairwise scan.
+    """
+    by_net: dict[IPv4Net, list[str]] = {}
+    for cidr, net in _all_owned_pairs(plan):
+        by_net.setdefault(net, []).append(cidr)
     out: list[tuple[str, str]] = []
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            a_cidr, a_net = items[i]
-            b_cidr, b_net = items[j]
-            if a_net == b_net:
-                out.append((a_cidr, b_cidr))
-            elif a_net.overlaps(b_net) and not a_net.subnet_of(b_net) and not b_net.subnet_of(a_net):
-                out.append((a_cidr, b_cidr))
+    for group in by_net.values():
+        if len(group) > 1:
+            out.extend(
+                (group[i], group[j])
+                for i in range(len(group))
+                for j in range(i + 1, len(group))
+            )
     return out
 
 
@@ -169,7 +206,8 @@ def find_orphans(plan: Plan) -> list[str]:
     supers = [parse(s.cidr) for s in plan.supernets]
     out: list[str] = []
     for rec in (*plan.allocations, *plan.reservations):
-        if not any(parse(rec.cidr).subnet_of(s) for s in supers):
+        net = parse(rec.cidr)
+        if not any(net.subnet_of(s) for s in supers):
             out.append(rec.cidr)
     return out
 
@@ -198,7 +236,7 @@ def carve(
     parent = parse(parent_cidr)
     # Callers typically pass *all* plan CIDRs including the parent itself
     # (which represents existence, not consumption); filter it out.
-    used_nets = [parse(c) for c in existing_cidrs if parse(c) != parent]
+    used_nets = [net for net in map(parse, existing_cidrs) if net != parent]
     free = _free_space(parent, used_nets)
 
     if count is not None:
