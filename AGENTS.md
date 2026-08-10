@@ -123,6 +123,13 @@ mapping into the plan model, error handling) is documented in
 [`docs/infoblox-csv-schema.md`](docs/infoblox-csv-schema.md). Keep that
 doc in sync with `app/infoblox.py` if you change parser behavior.
 
+There is also an Agent Skill at [`skills/vnp-csv-import/`](skills/vnp-csv-import/)
+that teaches an LLM to author these files. It bundles
+`scripts/validate_vnp_csv.py`, a stdlib-only reimplementation of the
+importer's parsing rules. **If you change `app/infoblox.py`, update that
+validator too** — the two are differential-tested against each other, and
+a drift means the skill starts vouching for files the importer rejects.
+
 ## Persistence
 
 - One plan per file: `plans/<name>.json`.
