@@ -151,7 +151,18 @@ network,198.51.100.128,255.255.255.192,West DB tier,west-db,"prod,db,us-west"
 Imports as 2 supernets and 4 allocations, with the supernet→allocation
 hierarchy inferred from CIDR containment automatically.
 
+## Generating a file with an LLM
+
+If you want Claude / ChatGPT / another assistant to build an import file for
+you, hand it [`skills/vnp-csv-import/`](../skills/vnp-csv-import/) — an
+Agent Skill packaging this format as instructions, including the traps that
+bite (silently-cleared host bits, unquoted `EA-TAGS`, prefix-in-address) and
+a standalone validator script that previews exactly what a file will import
+as. Point the model at `SKILL.md`, or drop the folder into its skills
+directory.
+
 ## Reference
 
 Parser implementation: [`app/infoblox.py`](../app/infoblox.py)
 Tests with worked examples: [`tests/test_infoblox.py`](../tests/test_infoblox.py)
+LLM-authoring skill: [`skills/vnp-csv-import/SKILL.md`](../skills/vnp-csv-import/SKILL.md)
