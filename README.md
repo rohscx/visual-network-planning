@@ -60,8 +60,15 @@ visualization in the middle (the hero), command rail on the right with
 terminal/engineering and a light variant felt out of place.
 JetBrains Mono for CIDRs, Geist Sans for prose.
 
-Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>Esc</kbd>
-closes overlays.
+Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>d</kbd> toggle
+detail/compact density · <kbd>Esc</kbd> closes overlays.
+
+The viz has two densities. **Detail** draws every supernet as a full
+nested-rectangle strip. **Compact** draws each as a 40px row with a
+proportional strip and an overview column that keeps every supernet on
+screen; click a row to expand it in place (free-slot click-to-carve works
+there exactly as in detail). The choice is remembered per browser, and
+`?density=compact` in the URL forces it for a shareable link.
 
 ## What it does
 

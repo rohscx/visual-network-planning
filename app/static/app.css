@@ -185,9 +185,10 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .node.selected { background: var(--bg-3); box-shadow: inset 2px 0 0 var(--acc); }
 .node .row {
   display: grid;
-  grid-template-columns: 14px 1fr auto;
+  grid-template-columns: 14px 1fr auto auto;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
+  row-gap: 1px;
 }
 .node .twist {
   width: 14px; height: 14px;
@@ -223,6 +224,19 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Direction C: a named row puts the name on its own line under the CIDR,
+   spanning to the right edge, so it can wrap instead of truncating.
+   (Free-slot rows keep the inline form — "free · 32 addrs" fits.) */
+.node .row > .name {
+  grid-column: 2 / -1;
+  min-width: 0;
+  margin-left: 0;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 .node .pct {
   font-family: "JetBrains Mono", monospace;
@@ -326,6 +340,98 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   border: 1px solid var(--line);
   border-radius: 4px;
 }
+
+/* ---- Compact density (Direction B) ---- */
+#viz.compact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 24px;
+  align-items: start;
+}
+.viz-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.viz-row {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  transition: border-color .12s, box-shadow .12s, opacity .12s;
+}
+.viz-row.hover, .viz-row:hover { border-color: var(--line-2); }
+.viz-row.expanded {
+  border-color: var(--acc);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--acc), transparent 82%);
+}
+.viz-row.selected { box-shadow: inset 2px 0 0 var(--acc); }
+.viz-row.dim, .viz-row.dim-filter { opacity: 0.35; }
+.viz-row .vr-head {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 236px;
+  gap: 16px;
+  align-items: center;
+  height: 40px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+.viz-row .vr-id {
+  display: flex; align-items: baseline; gap: 10px; min-width: 0;
+  font-family: "JetBrains Mono", monospace;
+}
+.viz-row .vr-id .cidr { color: var(--acc); font-weight: 600; font-size: 12px; white-space: nowrap; }
+.viz-row .vr-id .label { color: var(--fg-1); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viz-row .vr-strip {
+  position: relative; height: 22px;
+  background: var(--supernet);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.viz-row .vr-strip .b { position: absolute; top: 3px; bottom: 3px; min-width: 2px; border-radius: 2px; background: var(--used); }
+.viz-row .vr-strip .b.rv { background: var(--bg-3); border: 1px dashed var(--warn); box-sizing: border-box; }
+.viz-row .vr-strip .b.pp { background: transparent; border: 1px dashed var(--acc); box-sizing: border-box; min-width: 3px; }
+.viz-row .vr-strip .b.sub { opacity: 0.35; }
+.viz-row .vr-strip .dv { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line-2); pointer-events: none; }
+.viz-row .vr-figs {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--fg-2); white-space: nowrap;
+}
+.viz-row .vr-figs .density-bar { width: 60px; }
+.viz-row .vr-figs .pct { width: 32px; text-align: right; color: var(--fg-1); font-weight: 500; }
+.viz-row .vr-figs .pct.hot { color: var(--warn); }
+.viz-row .vr-chip {
+  display: inline-flex; align-items: center; gap: 4px; width: fit-content;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in oklab, var(--acc), transparent 60%);
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--acc), transparent 92%);
+  color: var(--acc);
+  font-family: "JetBrains Mono", monospace; font-size: 10px; white-space: nowrap;
+}
+.viz-row .vr-chip svg { width: 10px; height: 10px; }
+.viz-row .vr-detail { padding: 0 12px 12px; }
+
+.viz-overview { position: sticky; top: 0; display: flex; flex-direction: column; gap: 10px; }
+.viz-overview .ov-head {
+  display: flex; justify-content: space-between;
+  font-family: "JetBrains Mono", monospace; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-2);
+}
+.viz-overview .ov-head .n { color: var(--fg-3); }
+.viz-overview .ov-bars {
+  position: relative; display: flex; flex-direction: column; gap: 3px;
+  padding: 6px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 4px;
+}
+.viz-overview .ov-bar { height: 9px; background: var(--supernet); border-radius: 2px; overflow: hidden; cursor: pointer; }
+.viz-overview .ov-bar:hover { outline: 1px solid var(--line-2); }
+.viz-overview .ov-bar i { display: block; height: 100%; background: var(--used); }
+.viz-overview .ov-bar.rv i { background: var(--warn); }
+.viz-overview .ov-view {
+  position: absolute; left: 3px; right: 3px;
+  border: 1px solid var(--acc); border-radius: 3px;
+  background: color-mix(in oklab, var(--acc), transparent 94%);
+  pointer-events: none;
+  transition: top .08s, height .08s;
+}
+.viz-overview .ov-hint { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--fg-3); line-height: 1.5; }
 .viz-block { cursor: pointer; }
 .viz-block rect { transition: filter .12s ease, stroke-width .12s ease; }
 .viz-block.hover > rect.body { filter: brightness(1.22); stroke: var(--acc); stroke-width: 1.5; }
@@ -878,6 +984,10 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--warn);
 }
 .banner.err { background: color-mix(in oklab, var(--err), var(--bg) 82%); color: var(--err); }
+/* With ~100 orphans the link list used to squeeze the label into a five-line
+   column. Keep icon + label rigid; let the list take the rest and scroll. */
+.banner > span { flex: 0 0 auto; }
+.banner > span.mono { flex: 1 1 auto; min-width: 0; overflow-x: auto; white-space: nowrap; padding-bottom: 2px; }
 .banner a {
   color: inherit;
   font-family: "JetBrains Mono", monospace;

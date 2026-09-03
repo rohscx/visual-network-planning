@@ -189,8 +189,23 @@ const STATE = {
   searchRe:     null,   // compiled RegExp (or null when search is empty)
   tagFilter:    null,
   detailCidr:   null,
+  density:      loadDensity(),   // 'detail' | 'compact' (Direction B)
 };
 const SELECTED_PARENTS = new Set();
+// Supernets currently expanded in compact mode. Session-only on purpose:
+// it's a "what am I looking at right now" thing, not a preference.
+const EXPANDED = new Set();
+
+function loadDensity() {
+  // ?density=compact wins (shareable), then the remembered choice, then detail.
+  const q = new URLSearchParams(location.search).get('density');
+  if (q === 'compact' || q === 'detail') return q;
+  try {
+    const v = localStorage.getItem('vnp.density');
+    if (v === 'compact' || v === 'detail') return v;
+  } catch {}
+  return 'detail';
+}
 
 async function fetchPlan() {
   try {
@@ -373,16 +388,17 @@ function renderNode(node, isRoot) {
   // no name to avoid an empty-quote popup.
   const rowTooltip = node.name ? `${node.cidr} — ${node.name}` : node.cidr;
   row.title = rowTooltip;
+  // Direction C: CIDR / actions / pct on line one, the full name on its own
+  // line beneath — so a 30-char name never has to squeeze beside a 12px
+  // CIDR in a 280px sidebar. Rows without a name stay single-line.
   row.innerHTML = `
     <span class="twist"></span>
-    <span style="display:flex; align-items:center; min-width:0; gap:0;">
-      <span class="cidr copyable" data-copy="${node.cidr}" title="Click to copy">${matchedCidr}</span>
-      <span class="name">${matchedName}</span>
-    </span>
+    <span class="cidr copyable" data-copy="${node.cidr}" title="Click to copy">${matchedCidr}</span>
     <span class="actions-tn">
       <button data-act="del" title="Delete">×</button>
     </span>
     <span class="pct">${pctLabel}</span>
+    ${node.name ? `<span class="name">${matchedName}</span>` : ''}
   `;
   row.addEventListener('click', (e) => {
     if (e.target.closest('.twist')) {
@@ -455,6 +471,7 @@ function renderViz() {
   const supers = TREE.roots.filter(r => r.kind === 'supernet');
 
   if (!supers.length) {
+    vizEl.classList.remove('compact');
     vizEl.innerHTML = `
       <div class="empty">
         <div class="glyph-big">${'<i></i>'.repeat(16)}</div>
@@ -467,6 +484,7 @@ function renderViz() {
         <div class="empty-hints">
           <span><kbd>/</kbd> search</span>
           <span><kbd>c</kbd> carve</span>
+          <span><kbd>d</kbd> density</span>
         </div>
       </div>
     `;
@@ -501,7 +519,10 @@ function renderViz() {
     });
   }
 
-  for (const root of targets) {
+  vizEl.classList.toggle('compact', STATE.density === 'compact' && targets.length > 0);
+  if (STATE.density === 'compact' && targets.length) {
+    renderCompact(targets, CSS_VARS);
+  } else for (const root of targets) {
     const wrap = document.createElement('div');
     wrap.className = 'viz-supernet';
 
@@ -557,6 +578,178 @@ function renderViz() {
   // drawNode emits dim-filter only; selection state is layered on top so a
   // click can update it cheaply without rebuilding the SVG.
   applySelectionVisual();
+  if (STATE.density === 'compact') updateOverviewViewport();
+}
+
+//==========================================================
+//  Direction B — compact density: 40px rows, expand in place, overview
+//==========================================================
+function fillFor(node, css) {
+  return node.kind === 'reservation' ? css.bg3
+       : STATE.colorMode === 'tag'   ? primaryTagColor(effectiveTags(node))
+       : STATE.colorMode === 'util'  ? utilColor(node)
+       :                               css.used;
+}
+
+function renderCompact(targets, css) {
+  const list = document.createElement('div');
+  list.className = 'viz-list';
+  const ov = document.createElement('aside');
+  ov.className = 'viz-overview';
+
+  for (const root of targets) {
+    const used = usedAddresses(root), total = totalAddresses(root);
+    const pct = total > 0 ? Math.round(100 * used / total) : 0;
+    const ri = cidrInfo(root.cidr);
+    const isOpen = EXPANDED.has(root.cidr);
+    const dimByFilter = !!(STATE.tagFilter && !nodePassesTag(root, STATE.tagFilter));
+
+    const row = document.createElement('div');
+    row.className = 'viz-row' + (isOpen ? ' expanded' : '') + (dimByFilter ? ' dim-filter' : '');
+    row.dataset.cidr = root.cidr;
+
+    // Proportional strip: direct children at true positions, no labels (so
+    // nothing can collide), reservations dashed, proposals as mint outlines.
+    // Leaf-level occupancy, not "direct children" — a /16 tiled by four
+    // /18 containers would otherwise read as one solid 100% bar. Nested
+    // supernets become 1px dividers at their left edge; an allocation that
+    // has its own children gets a faint underlay with its leaves on top.
+    let bars = '';
+    const dividers = [];
+    const pos = (ci) => `left:${((ci.start - ri.start) / ri.size * 100).toFixed(3)}%;width:${(ci.size / ri.size * 100).toFixed(3)}%;`;
+    const walk = (n) => {
+      for (const c of n.children) {
+        const ci = cidrInfo(c.cidr);
+        const hasKids = c.children.length > 0;
+        if (c.kind === 'supernet' && hasKids) {
+          if (ci.start !== ri.start) dividers.push((ci.start - ri.start) / ri.size * 100);
+          walk(c);
+        } else if (c.kind === 'allocation' && hasKids) {
+          bars += `<div class="b sub" style="${pos(ci)}background:${fillFor(c, css)};" title="${escapeHtml(c.cidr)}${c.name ? ' · ' + escapeHtml(c.name) : ''}"></div>`;
+          walk(c);
+        } else {
+          const rv = c.kind === 'reservation';
+          bars += `<div class="b${rv ? ' rv' : ''}" style="${pos(ci)}${rv ? '' : 'background:' + fillFor(c, css) + ';'}" title="${escapeHtml(c.cidr)}${c.name ? ' · ' + escapeHtml(c.name) : ''}"></div>`;
+        }
+      }
+    };
+    walk(root);
+    for (const d of dividers) bars += `<div class="dv" style="left:${d.toFixed(3)}%"></div>`;
+    for (const p of (STATE.proposals || [])) {
+      if (!p.cidr) continue;
+      const pi = cidrInfo(p.cidr);
+      if (pi.start < ri.start || pi.end > ri.end) continue;
+      bars += `<div class="b pp" style="left:${((pi.start - ri.start) / ri.size * 100).toFixed(3)}%;width:${(pi.size / ri.size * 100).toFixed(3)}%;" title="proposed ${escapeHtml(p.cidr)}"></div>`;
+    }
+    const middle = isOpen
+      ? `<span class="vr-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>expanded in place · click a free slot to carve</span>`
+      : `<div class="vr-strip">${bars}</div>`;
+
+    row.innerHTML = `
+      <div class="vr-head">
+        <div class="vr-id"><span class="cidr">${root.cidr}</span><span class="label">${escapeHtml(root.name || '')}</span></div>
+        ${middle}
+        <div class="vr-figs">
+          <span>${fmtBytes(used)} / ${fmtBytes(total)}</span>
+          <div class="density-bar"><div class="fill" style="width:${pct}%"></div></div>
+          <span class="pct${pct > 80 ? ' hot' : ''}">${pct}%</span>
+        </div>
+      </div>`;
+    const head = row.querySelector('.vr-head');
+    head.addEventListener('click', () => {
+      if (EXPANDED.has(root.cidr)) EXPANDED.delete(root.cidr); else EXPANDED.add(root.cidr);
+      selectCidr(root.cidr);
+      renderViz();
+    });
+    head.addEventListener('mouseenter', (e) => showTooltip(e, tooltipForNode(root)));
+    head.addEventListener('mousemove', (e) => positionTooltip(e));
+    head.addEventListener('mouseleave', hideTooltip);
+    if (isOpen) {
+      const det = document.createElement('div');
+      det.className = 'vr-detail';
+      row.appendChild(det);
+    }
+    list.appendChild(row);
+  }
+
+  // Overview column: one bar per supernet, viewport box tracks scroll.
+  const bars = document.createElement('div');
+  bars.className = 'ov-bars';
+  let html = '';
+  for (const root of targets) {
+    const used = usedAddresses(root), total = totalAddresses(root);
+    const pct = total > 0 ? Math.round(100 * used / total) : 0;
+    const rvUsed = root.children.filter(c => c.kind === 'reservation').reduce((a, c) => a + c.size, 0);
+    const rv = used > 0 && rvUsed / used > 0.5;
+    html += `<div class="ov-bar${rv ? ' rv' : ''}" data-ov="${root.cidr}" title="${escapeHtml(root.cidr)}${root.name ? ' · ' + escapeHtml(root.name) : ''} · ${pct}%"><i style="width:${pct}%"></i></div>`;
+  }
+  bars.innerHTML = html + '<div class="ov-view"></div>';
+  bars.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ov]'); if (!b) return;
+    const row = list.querySelector(`.viz-row[data-cidr="${CSS.escape(b.dataset.ov)}"]`);
+    if (row) row.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  });
+  const n = targets.length;
+  ov.innerHTML = `<div class="ov-head"><span>overview</span><span class="n">${n} supernet${n === 1 ? '' : 's'}</span></div>`;
+  ov.appendChild(bars);
+  ov.insertAdjacentHTML('beforeend', '<div class="ov-hint">mint box = rows on screen · click a bar to jump · yellow = mostly reserved</div>');
+
+  vizEl.appendChild(list);
+  vizEl.appendChild(ov);
+
+  // Expanded rows get the full strip — the same drawNode as detail mode, so
+  // free-slot click-to-carve, tooltips and proposal overlays all work
+  // unchanged. Measured after insertion so the SVG fits its row.
+  for (const row of list.querySelectorAll('.viz-row.expanded')) {
+    const root = nodeOf(row.dataset.cidr); if (!root) continue;
+    const det = row.querySelector('.vr-detail');
+    const width = Math.max(200, det.clientWidth);
+    const height = 140 + maxDepth(root) * 24;
+    const svg = d3.select(det).append('svg')
+      .attr('class', 'viz-svg')
+      .attr('viewBox', `0 0 ${width} ${height}`)
+      .attr('preserveAspectRatio', 'none')
+      .style('height', height + 'px');
+    drawNode(svg, root, 0, 0, width, height, 0, root, css);
+    drawProposalOverlays(svg, root, 0, 0, width, height, css);
+  }
+
+  if (!renderCompact.scrollBound && vizWrap) {
+    vizWrap.addEventListener('scroll', () => {
+      if (STATE.density === 'compact') requestAnimationFrame(updateOverviewViewport);
+    }, { passive: true });
+    renderCompact.scrollBound = true;
+  }
+}
+
+function updateOverviewViewport() {
+  const ov = vizEl.querySelector('.viz-overview'); if (!ov || !vizWrap) return;
+  const box = ov.querySelector('.ov-view');
+  const bars = [...ov.querySelectorAll('.ov-bar')];
+  const rows = [...vizEl.querySelectorAll('.viz-list > .viz-row')];
+  if (!box || !rows.length || bars.length !== rows.length) return;
+  const wr = vizWrap.getBoundingClientRect();
+  let first = -1, last = -1;
+  rows.forEach((r, i) => {
+    const rr = r.getBoundingClientRect();
+    if (rr.bottom > wr.top && rr.top < wr.bottom) { if (first < 0) first = i; last = i; }
+  });
+  if (first < 0) { box.style.display = 'none'; return; }
+  const top = bars[first].offsetTop, bottom = bars[last].offsetTop + bars[last].offsetHeight;
+  box.style.display = '';
+  box.style.top = (top - 3) + 'px';
+  box.style.height = (bottom - top + 6) + 'px';
+}
+
+function setDensity(d) {
+  STATE.density = d;
+  try { localStorage.setItem('vnp.density', d); } catch {}
+  syncDensitySeg();
+  renderViz();
+}
+function syncDensitySeg() {
+  document.querySelectorAll('.seg button[data-density]').forEach(x =>
+    x.setAttribute('aria-pressed', x.dataset.density === STATE.density ? 'true' : 'false'));
 }
 
 function maxDepth(n) {
@@ -599,19 +792,24 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
     .attr('stroke', node.kind === 'supernet' ? css.line : 'rgba(0,0,0,0.2)')
     .attr('stroke-width', 1);
 
-  if (w > 60) {
+  const label = fitCidrLabel(node.cidr, w);
+  if (label) {
     g.append('text')
       .attr('x', x + 8).attr('y', y + 14)
       .attr('font-weight', '600')
-      .text(node.cidr);
-    if (w > 180 && node.name) {
-      g.append('text')
-        .attr('x', x + 8).attr('y', y + 14)
-        .attr('text-anchor', 'start')
-        .attr('font-weight', '400')
-        .attr('opacity', 0.75)
-        .attr('dx', cidrLen(node.cidr) + 12)
-        .text(node.name.length > 28 ? node.name.slice(0, 26) + '…' : node.name);
+      .text(label);
+    if (node.name) {
+      const nm = node.name.length > 28 ? node.name.slice(0, 26) + '…' : node.name;
+      // Name only if cidr + gap + name all fit inside the block.
+      if (cidrLen(label) + 12 + cidrLen(nm) + LABEL_PAD <= w) {
+        g.append('text')
+          .attr('x', x + 8).attr('y', y + 14)
+          .attr('text-anchor', 'start')
+          .attr('font-weight', '400')
+          .attr('opacity', 0.75)
+          .attr('dx', cidrLen(label) + 12)
+          .text(nm);
+      }
     }
   }
 
@@ -669,12 +867,13 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
         .attr('width', Math.max(0, pw - pad))
         .attr('height', innerH)
         .attr('rx', 2);
-      if (pw > 50) {
+      const fl = fitCidrLabel(p.cidr, pw);
+      if (fl) {
         fg.append('text')
           .attr('class', 'dark')
           .attr('x', px + 5).attr('y', innerY + 13)
           .attr('opacity', 0.7)
-          .text(p.cidr);
+          .text(fl);
       }
       bindHoverFree(fg.node(), p, node);
     } else {
@@ -764,6 +963,20 @@ function utilColor(node) {
 }
 function cidrLen(c) { return c.length * 6.6; }
 
+// Direction A — gate labels on the LABEL's width, not the block's. A CIDR
+// label is ~92px at 10px mono, so the old "block > 60px" rule let every
+// 61–100px block spill its label into the neighbour. Try the full CIDR,
+// then a short form that drops the octets shared with the parent
+// (".24.0/21"), else no label — hover still shows everything.
+const LABEL_PAD = 10;
+function shortCidr(cidr) { return cidr.replace(/^\d+\.\d+/, ''); }
+function fitCidrLabel(cidr, w) {
+  if (cidrLen(cidr) + LABEL_PAD <= w) return cidr;
+  const s = shortCidr(cidr);
+  if (cidrLen(s) + LABEL_PAD <= w) return s;
+  return '';
+}
+
 //==========================================================
 //  Selection + tooltips
 //==========================================================
@@ -792,6 +1005,13 @@ function applySelectionVisual() {
       || cidr === sel
       || isSubnetOf(cidr, sel)
       || isSubnetOf(sel, cidr);
+    el.classList.toggle('dim', !!sel && !isLineage);
+  }
+  // Compact-mode rows carry the same selected / lineage-dim treatment.
+  for (const el of document.querySelectorAll('#viz .viz-row[data-cidr]')) {
+    const cidr = el.dataset.cidr;
+    el.classList.toggle('selected', !!sel && cidr === sel);
+    const isLineage = !sel || cidr === sel || isSubnetOf(cidr, sel) || isSubnetOf(sel, cidr);
     el.classList.toggle('dim', !!sel && !isLineage);
   }
 }
@@ -1540,6 +1760,10 @@ document.querySelectorAll('.seg button[data-zoom]').forEach(b => {
     renderViz();
   });
 });
+document.querySelectorAll('.seg button[data-density]').forEach(b => {
+  b.addEventListener('click', () => setDensity(b.dataset.density));
+});
+syncDensitySeg();
 document.querySelectorAll('#carveMode button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('#carveMode button').forEach(x => x.setAttribute('aria-pressed','false'));
@@ -1813,6 +2037,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.target.matches('input, select, textarea')) return;
   if (e.key === 'c') switchTab('carve');
+  if (e.key === 'd') setDensity(STATE.density === 'compact' ? 'detail' : 'compact');
   if (e.key === '/') { e.preventDefault(); openSearch(); }
 });
 
