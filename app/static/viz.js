@@ -104,6 +104,30 @@ function computeFree(parent) {
     .filter(r => r.size > 0)
     .map(r => `${intToIp(r.start)}/${32 - Math.log2(r.size)}`);
 }
+// buildTree computes every node's direct gaps before summaries read them.
+const subtreeFree = (root) => {
+  let total = 0;
+  let largest = null;
+  let largestSize = 0;
+  const walk = (node) => {
+    if (node.kind === 'reservation') return;
+    for (const cidr of node.free) {
+      const { size } = cidrInfo(cidr);
+      total += size;
+      if (size > largestSize) {
+        largest = cidr;
+        largestSize = size;
+      }
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(root);
+  return { total, largest };
+};
+const capacityLabel = ({ total, largest }) => largest
+  ? `largest /${cidrInfo(largest).prefix} · ${fmtBytes(total)} free`
+  : 'no free space';
+
 function decomposeAligned(start, size) {
   const out = [];
   let s = start, remaining = size;
@@ -500,6 +524,7 @@ function renderViz() {
   const CSS_VARS = {
     supernet: getCss('--supernet'),
     bg3:      getCss('--bg-3'),
+    free:     getCss('--free'),
     used:     getCss('--used'),
     line:     getCss('--line'),
     acc:      getCss('--acc'),
@@ -526,9 +551,13 @@ function renderViz() {
     const wrap = document.createElement('div');
     wrap.className = 'viz-supernet';
 
-    const used = usedAddresses(root);
     const total = totalAddresses(root);
-    const pct = total > 0 ? Math.round(100 * used / total) : 0;
+    const free = subtreeFree(root);
+    // Share the capacity figure's basis: usedAddresses() counts only direct
+    // children, so a /16 tiled by four /18 containers reads 100% while its
+    // leaves sit mostly empty — beside "28.9K free" that looks like a bug.
+    const pct = total > 0 ? Math.round(100 * (total - free.total) / total) : 0;
+    const capacity = capacityLabel(free);
 
     const cap = document.createElement('div');
     cap.className = 'cap';
@@ -538,9 +567,9 @@ function renderViz() {
         <span class="label">${root.name || ''}</span>
       </div>
       <div class="rhs">
-        <span>${fmtBytes(used)} / ${fmtBytes(total)}</span>
+        <span class="capacity">${capacity}</span>
         <div class="density-bar"><div class="fill" style="width:${pct}%"></div></div>
-        <span style="color:${pct>80?'var(--warn)':'var(--fg-1)'}; font-weight:500;">${pct}%</span>
+        <span class="pct${pct > 80 ? ' hot' : ''}">${pct}% assigned</span>
       </div>
     `;
     wrap.appendChild(cap);
@@ -565,7 +594,7 @@ function renderViz() {
     const msg = STATE.searchRe
       ? 'no supernets contain matches · clear search to see everything'
       : 'no supernets in scope';
-    vizEl.innerHTML = `<div style="padding:48px; text-align:center; color:var(--fg-3); font-family:JetBrains Mono,monospace; font-size:12px;">${msg}</div>`;
+    vizEl.innerHTML = `<div style="padding:48px; text-align:center; color:var(--fg-2); font-family:JetBrains Mono,monospace; font-size:12px;">${msg}</div>`;
   }
 
   // Restore scroll synchronously — by this point all wraps are appended so
@@ -591,6 +620,27 @@ function fillFor(node, css) {
        :                               css.used;
 }
 
+// canvas resolves runtime oklch fills to the same sRGB channels used for contrast.
+const inkCanvas = document.createElement('canvas');
+inkCanvas.width = inkCanvas.height = 1;
+const inkContext = inkCanvas.getContext('2d', { willReadFrequently: true });
+const inkCache = new Map();
+const labelInk = (fill) => {
+  if (inkCache.has(fill)) return inkCache.get(fill);
+  inkContext.clearRect(0, 0, 1, 1);
+  inkContext.fillStyle = fill;
+  inkContext.fillRect(0, 0, 1, 1);
+  const channels = inkContext.getImageData(0, 0, 1, 1).data;
+  const linear = Array.from(channels).slice(0, 3).map(value => {
+    const channel = value / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  const ink = luminance > 0.179 ? '#0b0d10' : 'var(--fg)';
+  inkCache.set(fill, ink);
+  return ink;
+};
+
 function renderCompact(targets, css) {
   const list = document.createElement('div');
   list.className = 'viz-list';
@@ -598,8 +648,10 @@ function renderCompact(targets, css) {
   ov.className = 'viz-overview';
 
   for (const [rowIndex, root] of targets.entries()) {
-    const used = usedAddresses(root), total = totalAddresses(root);
-    const pct = total > 0 ? Math.round(100 * used / total) : 0;
+    const total = totalAddresses(root);
+    const free = subtreeFree(root);
+    const pct = total > 0 ? Math.round(100 * (total - free.total) / total) : 0;
+    const capacity = capacityLabel(free);
     const ri = cidrInfo(root.cidr);
     const isOpen = EXPANDED.has(root.cidr);
     const dimByFilter = !!(STATE.tagFilter && !nodePassesTag(root, STATE.tagFilter));
@@ -652,13 +704,13 @@ function renderCompact(targets, css) {
 
     row.innerHTML = `
       <div class="vr-head" role="button" tabindex="0" aria-expanded="${isOpen}"
-           aria-label="${escapeHtml(root.cidr)}${root.name ? ' — ' + escapeHtml(root.name) : ''}, ${pct}% used. Expand in place.">
+           aria-label="${escapeHtml(root.cidr)}${root.name ? ' — ' + escapeHtml(root.name) : ''}, ${capacity}, ${pct}% assigned. Expand in place.">
         <div class="vr-id"><span class="cidr">${escapeHtml(root.cidr)}</span><span class="label">${escapeHtml(root.name || '')}</span></div>
         ${middle}
         <div class="vr-figs">
-          <span>${fmtBytes(used)} / ${fmtBytes(total)}</span>
+          <span class="capacity">${capacity}</span>
           <div class="density-bar"><div class="fill" style="width:${pct}%"></div></div>
-          <span class="pct${pct > 80 ? ' hot' : ''}">${pct}%</span>
+          <span class="pct${pct > 80 ? ' hot' : ''}">${pct}% assigned</span>
         </div>
       </div>`;
     const head = row.querySelector('.vr-head');
@@ -691,10 +743,12 @@ function renderCompact(targets, css) {
   bars.className = 'ov-bars';
   let html = '';
   for (const root of targets) {
-    const used = usedAddresses(root), total = totalAddresses(root);
-    const pct = total > 0 ? Math.round(100 * used / total) : 0;
+    const total = totalAddresses(root);
+    // Same basis as the rows beside it, so a bar never disagrees with its row.
+    const pct = total > 0 ? Math.round(100 * (total - subtreeFree(root).total) / total) : 0;
+    const directUsed = usedAddresses(root);
     const rvUsed = root.children.filter(c => c.kind === 'reservation').reduce((a, c) => a + c.size, 0);
-    const rv = used > 0 && rvUsed / used > 0.5;
+    const rv = directUsed > 0 && rvUsed / directUsed > 0.5;
     html += `<div class="ov-bar${rv ? ' rv' : ''}" data-ov="${escapeHtml(root.cidr)}" role="button" tabindex="0" aria-label="Jump to ${escapeHtml(root.cidr)}, ${pct}% used" title="${escapeHtml(root.cidr)}${root.name ? ' · ' + escapeHtml(root.name) : ''} · ${pct}%"><i style="width:${pct}%"></i></div>`;
   }
   bars.innerHTML = html + '<div class="ov-view"></div>';
@@ -844,6 +898,9 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
     g.append('text')
       .attr('x', x + 8).attr('y', y + 14)
       .attr('font-weight', '600')
+      // reservations keep their warn-yellow from the stylesheet: that colour
+      // is the semantic cue, and it already clears 9.9:1 on the fill.
+      .style('fill', node.kind === 'reservation' ? null : labelInk(fill))
       .text(label);
     if (node.name) {
       const nm = node.name.length > 28 ? node.name.slice(0, 26) + '…' : node.name;
@@ -852,6 +909,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
         g.append('text')
           .attr('x', x + 8).attr('y', y + 14)
           .attr('text-anchor', 'start')
+          .style('fill', node.kind === 'reservation' ? null : labelInk(fill))
           .attr('font-weight', '400')
           .attr('opacity', 0.75)
           .attr('dx', cidrLen(label) + 12)
@@ -917,7 +975,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
       const fl = fitCidrLabel(p.cidr, pw, node.cidr);
       if (fl) {
         fg.append('text')
-          .attr('class', 'dark')
+          .style('fill', labelInk(css.free))
           .attr('x', px + 5).attr('y', innerY + 13)
           .attr('opacity', 0.7)
           .text(fl);
@@ -1139,7 +1197,7 @@ function tooltipForNode(node) {
     : `<span class="k">used</span><span class="v">${fmtBytes(used)} (${pct}%)</span>`;
   return `
     <div class="tip-cidr"${node.kind==='reservation' ? ' style="color:var(--warn)"' : ''}>${node.cidr}</div>
-    <div class="tip-name">${node.name || '<i style="color:var(--fg-3)">unnamed</i>'}</div>
+    <div class="tip-name">${node.name || '<i style="color:var(--fg-2)">unnamed</i>'}</div>
     <div class="tip-grid">
       <span class="k">type</span><span class="v">${node.kind}</span>
       <span class="k">size</span><span class="v">${fmtBytes(total)} addrs (/${node.prefix})</span>
@@ -2076,7 +2134,7 @@ function updateLegend() {
     const allTags = new Set();
     for (const a of (PLAN.allocations || [])) (a.tags || []).forEach(t => allTags.add(t));
     const top = [...allTags].slice(0, 6);
-    lg.innerHTML = top.map(t => `<span><span class="swatch" style="background:${tagColor(t)}"></span>${t}</span>`).join('') || '<span style="color:var(--fg-3)">no tags</span>';
+    lg.innerHTML = top.map(t => `<span><span class="swatch" style="background:${tagColor(t)}"></span>${t}</span>`).join('') || '<span style="color:var(--fg-2)">no tags</span>';
   } else if (STATE.colorMode === 'util') {
     lg.innerHTML = `
       <span><span class="swatch" style="background:oklch(0.66 0.13 165)"></span>0%</span>

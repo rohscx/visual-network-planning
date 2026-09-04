@@ -13,15 +13,15 @@
   --line-2:    #2d3540;
   --fg:        #d6dde5;
   --fg-1:      #aeb6c0;
-  --fg-2:      #6f7884;
-  --fg-3:      #4a525c;
+  --fg-2:      #8b95a3;
+  --fg-3:      #626d7b;
   --acc:       #6ee7b7;   /* mint — primary action */
   --acc-2:     #38bdf8;   /* cyan — info / link */
   --warn:      #fbbf24;
   --err:       #fb7185;
   --used:      #38bdf8;
-  --free:      #2a323c;
-  --free-2:    #343d49;
+  --free:      #404b58;
+  --free-2:    #4c5866;
   --supernet:  #1e2730;
   --grid:      rgba(255,255,255,0.03);
   --shadow:    0 1px 0 rgba(255,255,255,0.04) inset, 0 1px 2px rgba(0,0,0,0.6);
@@ -158,7 +158,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   border-bottom: 1px solid var(--line);
   background: var(--bg-1);
 }
-.head .count { color: var(--fg-3); font-weight: 400; }
+.head .count { color: var(--fg-2); font-weight: 400; }
 
 /* ---- Sidebar: hierarchy tree ---- */
 .meta-row {
@@ -170,7 +170,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
 }
-.meta-row .k { color: var(--fg-3); }
+.meta-row .k { color: var(--fg-2); }
 .meta-row .v { color: var(--fg-1); text-align: right; }
 .meta-row .v.acc { color: var(--acc); }
 
@@ -192,7 +192,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .node .twist {
   width: 14px; height: 14px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 10px;
   font-family: "JetBrains Mono", monospace;
@@ -241,14 +241,14 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .node .pct {
   font-family: "JetBrains Mono", monospace;
   font-size: 10px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   padding: 1px 5px;
   border-radius: 2px;
   background: var(--bg-2);
   border: 1px solid var(--line);
 }
-.node.is-free .cidr { color: var(--fg-3); }
-.node.is-free .name { font-style: italic; color: var(--fg-3); }
+.node.is-free .cidr { color: var(--fg-2); }
+.node.is-free .name { font-style: italic; color: var(--fg-2); }
 
 .children {
   margin-left: 12px;
@@ -325,6 +325,9 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .viz-supernet .cap .lhs .cidr { color: var(--acc); font-weight: 600; font-size: 12px; }
 .viz-supernet .cap .lhs .label { color: var(--fg-1); }
 .viz-supernet .cap .rhs { display: flex; align-items: center; gap: 12px; }
+.viz-supernet .cap .capacity, .viz-row .vr-figs .capacity { color: var(--fg); }
+.viz-supernet .cap .pct { font-size: 10px; color: var(--fg-2); }
+.viz-supernet .cap .pct.hot { color: var(--warn); }
 .density-bar {
   width: 120px; height: 6px;
   background: var(--free); border-radius: 2px;
@@ -387,11 +390,10 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   outline-offset: -2px;
   border-radius: 4px;
 }
-/* Below this the figures cost more than they tell you — the utilization bar
-   and the byte counts go, the percentage stays. */
+/* keep available capacity visible when secondary figures no longer fit. */
 @media (max-width: 1400px) {
   .viz-row .vr-head { grid-template-columns: minmax(110px, 220px) minmax(60px, 1fr) auto; gap: 10px; }
-  .viz-row .vr-figs > span:first-child,
+  .viz-row .vr-figs .pct,
   .viz-row .vr-figs .density-bar { display: none; }
 }
 .viz-row .vr-id {
@@ -415,12 +417,13 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .viz-row .vr-strip .b.sub.dim-filter { opacity: 0.06; }
 .viz-row .vr-strip .dv { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line-2); pointer-events: none; }
 .viz-row .vr-figs {
-  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; justify-items: end; gap: 2px 8px;
   font-family: "JetBrains Mono", monospace;
   font-size: 11px; color: var(--fg-2); white-space: nowrap;
 }
+.viz-row .vr-figs .capacity { grid-column: 1 / -1; }
 .viz-row .vr-figs .density-bar { width: 60px; }
-.viz-row .vr-figs .pct { width: 32px; text-align: right; color: var(--fg-1); font-weight: 500; }
+.viz-row .vr-figs .pct { text-align: right; color: var(--fg-2); font-size: 10px; }
 .viz-row .vr-figs .pct.hot { color: var(--warn); }
 .viz-row .vr-chip {
   display: inline-flex; align-items: center; gap: 4px;
@@ -450,7 +453,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-family: "JetBrains Mono", monospace; font-size: 11px;
   text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-2);
 }
-.viz-overview .ov-head .n { color: var(--fg-3); }
+.viz-overview .ov-head .n { color: var(--fg-2); }
 .viz-overview .ov-bars {
   position: relative; display: flex; flex-direction: column; gap: 3px;
   padding: 6px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 4px;
@@ -468,7 +471,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   pointer-events: none;
   transition: top .08s, height .08s;
 }
-.viz-overview .ov-hint { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--fg-3); line-height: 1.5; }
+.viz-overview .ov-hint { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--fg-2); line-height: 1.5; }
 .viz-block { cursor: pointer; }
 .viz-block rect { transition: filter .12s ease, stroke-width .12s ease; }
 .viz-block.hover > rect.body { filter: brightness(1.22); stroke: var(--acc); stroke-width: 1.5; }
@@ -479,9 +482,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-family: "JetBrains Mono", monospace;
   font-size: 10px;
   pointer-events: none;
-  fill: #fff;
+  fill: var(--fg);
 }
-.viz-block text.dark { fill: var(--fg); }
 .viz-block.is-free rect.body {
   fill: var(--free);
   stroke: var(--free-2);
@@ -512,9 +514,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .viz-block.is-reservation:hover rect.body,
 .viz-block.is-reservation.hover rect.body { fill: var(--bg-2); }
-/* Warn-yellow on dark gray at 10-11px sits right on the WCAG AA edge —
-   bump font weight and apply a subtle text shadow so the glyphs read
-   crisp without changing the brand color. */
+/* Warn-yellow is the reservation's semantic cue, not a contrast compromise —
+   it reads at ~9.9:1 on the fill. The stroke keeps 10px glyphs crisp. */
 .viz-block.is-reservation text {
   fill: var(--warn);
   font-weight: 600;
@@ -561,7 +562,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
 }
-.tooltip .tip-grid .k { color: var(--fg-3); }
+.tooltip .tip-grid .k { color: var(--fg-2); }
 .tooltip .tip-grid .v { color: var(--fg-1); text-align: right; }
 .tooltip .tip-tags {
   display: flex; flex-wrap: wrap; gap: 4px;
@@ -603,7 +604,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .tooltip .tip-tags .tip-tags-divider {
   width: 100%;
   font-size: 9px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin-top: 2px;
@@ -648,7 +649,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .panel .hint {
   font-size: 11px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   margin: 0 0 14px;
   line-height: 1.5;
 }
@@ -659,7 +660,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--fg-3);
+  color: var(--fg-2);
   margin-bottom: 4px;
 }
 .field input, .field select, .field textarea {
@@ -678,7 +679,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   border-color: var(--acc);
   box-shadow: 0 0 0 1px var(--acc) inset;
 }
-.field input::placeholder { color: var(--fg-3); }
+.field input::placeholder { color: var(--fg-2); }
 /* Server rejected the value (overlap, dup, malformed CIDR). User starts
    typing → JS strips the class on `input`. */
 .field input.field-error {
@@ -741,7 +742,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .parent-picker .pp-row .name { color: var(--fg-2); margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .parent-picker .pp-row .free-pill {
   font-size: 10px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   background: var(--bg-3);
   border: 1px solid var(--line);
   border-radius: 2px;
@@ -888,7 +889,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--fg-3);
+  color: var(--fg-2);
 }
 .proposals-copy-btn {
   height: auto;
@@ -909,7 +910,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--fg-2);
   font-size: 11px;
 }
-.proposal .pmeta { color: var(--fg-3); font-size: 10px; }
+.proposal .pmeta { color: var(--fg-2); font-size: 10px; }
 .proposal .pmeta b { color: var(--fg-2); font-weight: 500; }
 
 .commit-row {
@@ -973,7 +974,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--fg-3);
+  color: var(--fg-2);
   font-weight: 500;
   background: var(--bg-2);
 }
@@ -993,7 +994,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .plan-table button.linkdel,
 .plan-table button.linkact {
   background: transparent; border: 1px solid transparent;
-  color: var(--fg-3);
+  color: var(--fg-2);
   cursor: pointer; font-size: 13px;
   padding: 2px 7px; min-width: 26px;
   border-radius: 3px;
@@ -1054,7 +1055,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   border-top: 1px solid var(--line);
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
-  color: var(--fg-3);
+  color: var(--fg-2);
 }
 .statusbar .ok { color: var(--acc); }
 .statusbar .warn { color: var(--warn); }
@@ -1131,13 +1132,13 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .searchbar .matches {
   font-family: "JetBrains Mono", monospace;
   font-size: 10px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   white-space: nowrap;
 }
 .searchbar .x {
   background: transparent;
   border: none;
-  color: var(--fg-3);
+  color: var(--fg-2);
   cursor: pointer;
   font-size: 14px;
   padding: 4px;
@@ -1180,7 +1181,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .node .row .actions-tn button {
   background: transparent;
   border: none;
-  color: var(--fg-3);
+  color: var(--fg-2);
   cursor: pointer;
   width: 16px; height: 16px;
   line-height: 1;
@@ -1220,7 +1221,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .detail-head .x {
   background: transparent;
   border: none;
-  color: var(--fg-3);
+  color: var(--fg-2);
   cursor: pointer;
   font-size: 16px;
   padding: 2px 6px;
@@ -1252,7 +1253,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--fg-3);
+  color: var(--fg-2);
 }
 .detail-stat .v {
   font-family: "JetBrains Mono", monospace;
@@ -1338,6 +1339,6 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   margin-top: 18px;
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
-  color: var(--fg-3);
+  color: var(--fg-2);
 }
 .empty .empty-hints span { display: inline-flex; align-items: center; gap: 6px; }
