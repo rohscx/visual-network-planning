@@ -597,7 +597,7 @@ function renderCompact(targets, css) {
   const ov = document.createElement('aside');
   ov.className = 'viz-overview';
 
-  for (const root of targets) {
+  for (const [rowIndex, root] of targets.entries()) {
     const used = usedAddresses(root), total = totalAddresses(root);
     const pct = total > 0 ? Math.round(100 * used / total) : 0;
     const ri = cidrInfo(root.cidr);
@@ -607,6 +607,7 @@ function renderCompact(targets, css) {
     const row = document.createElement('div');
     row.className = 'viz-row' + (isOpen ? ' expanded' : '') + (dimByFilter ? ' dim-filter' : '');
     row.dataset.cidr = root.cidr;
+    row.dataset.rowIndex = rowIndex;
 
     // Proportional strip: direct children at true positions, no labels (so
     // nothing can collide), reservations dashed, proposals as mint outlines.
@@ -620,16 +621,20 @@ function renderCompact(targets, css) {
     const walk = (n) => {
       for (const c of n.children) {
         const ci = cidrInfo(c.cidr);
-        const hasKids = c.children.length > 0;
-        if (c.kind === 'supernet' && hasKids) {
+        const dim = dimmedByFilter(c) ? ' dim-filter' : '';
+        const title = `title="${escapeHtml(c.cidr)}${c.name ? ' · ' + escapeHtml(c.name) : ''}"`;
+        if (c.kind === 'supernet') {
+          // A container contributes a divider and its leaves, never a fill of
+          // its own — a childless /18 painted as a solid bar read as "fully
+          // allocated" when it is in fact entirely free.
           if (ci.start !== ri.start) dividers.push((ci.start - ri.start) / ri.size * 100);
           walk(c);
-        } else if (c.kind === 'allocation' && hasKids) {
-          bars += `<div class="b sub" style="${pos(ci)}background:${fillFor(c, css)};" title="${escapeHtml(c.cidr)}${c.name ? ' · ' + escapeHtml(c.name) : ''}"></div>`;
+        } else if (c.kind === 'allocation' && c.children.length > 0) {
+          bars += `<div class="b sub${dim}" style="${pos(ci)}background:${fillFor(c, css)};" ${title}></div>`;
           walk(c);
         } else {
           const rv = c.kind === 'reservation';
-          bars += `<div class="b${rv ? ' rv' : ''}" style="${pos(ci)}${rv ? '' : 'background:' + fillFor(c, css) + ';'}" title="${escapeHtml(c.cidr)}${c.name ? ' · ' + escapeHtml(c.name) : ''}"></div>`;
+          bars += `<div class="b${rv ? ' rv' : ''}${dim}" style="${pos(ci)}${rv ? '' : 'background:' + fillFor(c, css) + ';'}" ${title}></div>`;
         }
       }
     };
@@ -646,8 +651,9 @@ function renderCompact(targets, css) {
       : `<div class="vr-strip">${bars}</div>`;
 
     row.innerHTML = `
-      <div class="vr-head">
-        <div class="vr-id"><span class="cidr">${root.cidr}</span><span class="label">${escapeHtml(root.name || '')}</span></div>
+      <div class="vr-head" role="button" tabindex="0" aria-expanded="${isOpen}"
+           aria-label="${escapeHtml(root.cidr)}${root.name ? ' — ' + escapeHtml(root.name) : ''}, ${pct}% used. Expand in place.">
+        <div class="vr-id"><span class="cidr">${escapeHtml(root.cidr)}</span><span class="label">${escapeHtml(root.name || '')}</span></div>
         ${middle}
         <div class="vr-figs">
           <span>${fmtBytes(used)} / ${fmtBytes(total)}</span>
@@ -656,10 +662,18 @@ function renderCompact(targets, css) {
         </div>
       </div>`;
     const head = row.querySelector('.vr-head');
-    head.addEventListener('click', () => {
+    const toggle = () => {
       if (EXPANDED.has(root.cidr)) EXPANDED.delete(root.cidr); else EXPANDED.add(root.cidr);
       selectCidr(root.cidr);
       renderViz();
+      // restore focus by position after renderViz() rebuilds the list;
+      // duplicate root CIDRs mean CIDR cannot uniquely identify a row.
+      const again = vizEl.querySelector(`.viz-list .viz-row[data-row-index="${rowIndex}"] .vr-head`);
+      if (again) again.focus();
+    };
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
     });
     head.addEventListener('mouseenter', (e) => showTooltip(e, tooltipForNode(root)));
     head.addEventListener('mousemove', (e) => positionTooltip(e));
@@ -681,13 +695,25 @@ function renderCompact(targets, css) {
     const pct = total > 0 ? Math.round(100 * used / total) : 0;
     const rvUsed = root.children.filter(c => c.kind === 'reservation').reduce((a, c) => a + c.size, 0);
     const rv = used > 0 && rvUsed / used > 0.5;
-    html += `<div class="ov-bar${rv ? ' rv' : ''}" data-ov="${root.cidr}" title="${escapeHtml(root.cidr)}${root.name ? ' · ' + escapeHtml(root.name) : ''} · ${pct}%"><i style="width:${pct}%"></i></div>`;
+    html += `<div class="ov-bar${rv ? ' rv' : ''}" data-ov="${escapeHtml(root.cidr)}" role="button" tabindex="0" aria-label="Jump to ${escapeHtml(root.cidr)}, ${pct}% used" title="${escapeHtml(root.cidr)}${root.name ? ' · ' + escapeHtml(root.name) : ''} · ${pct}%"><i style="width:${pct}%"></i></div>`;
   }
   bars.innerHTML = html + '<div class="ov-view"></div>';
-  bars.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-ov]'); if (!b) return;
+  // The bar column scrolls on its own once it is capped; a re-render would
+  // otherwise snap it back to the top mid-scroll.
+  const keptScroll = renderCompact.ovScroll || 0;
+  bars.addEventListener('scroll', () => { renderCompact.ovScroll = bars.scrollTop; }, { passive: true });
+  requestAnimationFrame(() => { bars.scrollTop = keptScroll; });
+  const jumpTo = (b) => {
     const row = list.querySelector(`.viz-row[data-cidr="${CSS.escape(b.dataset.ov)}"]`);
     if (row) row.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+  bars.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ov]'); if (b) jumpTo(b);
+  });
+  bars.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const b = e.target.closest('[data-ov]'); if (!b) return;
+    e.preventDefault(); jumpTo(b);
   });
   const n = targets.length;
   ov.innerHTML = `<div class="ov-head"><span>overview</span><span class="n">${n} supernet${n === 1 ? '' : 's'}</span></div>`;
@@ -739,6 +765,17 @@ function updateOverviewViewport() {
   box.style.display = '';
   box.style.top = (top - 3) + 'px';
   box.style.height = (bottom - top + 6) + 'px';
+
+  // Keep the marker in view when the column is scrollable, or it drifts below
+  // the clipped edge on a tall plan and the overview stops answering
+  // "where am I?".
+  const track = box.parentElement;
+  if (track && track.scrollHeight > track.clientHeight) {
+    const t = top - 3, b = bottom + 3;
+    if (t < track.scrollTop) track.scrollTop = Math.max(0, t - 6);
+    else if (b > track.scrollTop + track.clientHeight) track.scrollTop = b - track.clientHeight + 6;
+    renderCompact.ovScroll = track.scrollTop;
+  }
 }
 
 function setDensity(d) {
@@ -757,6 +794,17 @@ function maxDepth(n) {
   return 1 + Math.max(...n.children.map(maxDepth));
 }
 
+// The one filter predicate, shared by the detail SVG and the compact strip
+// so a tag pill or a search dims the same blocks in both densities.
+function dimmedByFilter(node) {
+  if (STATE.tagFilter && !nodePassesTag(node, STATE.tagFilter)) return true;
+  if (STATE.searchRe) {
+    const m = nodeMatches(node, STATE.searchRe);
+    if (!m.self && !m.descendant) return true;
+  }
+  return false;
+}
+
 function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
   const padTop = depth === 0 ? 22 : 16;
   const pad = 2;
@@ -766,8 +814,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
   // Filter-based dim (tag-filter pill, search) is baked in here. Selection-
   // based dim is applied separately by applySelectionVisual() so a click
   // doesn't have to rebuild the SVG to update which blocks are dimmed.
-  const dimByFilter = (STATE.tagFilter && !nodePassesTag(node, STATE.tagFilter))
-                   || (STATE.searchRe && !(nodeMatches(node, STATE.searchRe).self || nodeMatches(node, STATE.searchRe).descendant));
+  const dimByFilter = dimmedByFilter(node);
   const inConflict = SERVER.conflicts.some(([a,b]) => a === node.cidr || b === node.cidr);
   const g = svg.append('g').attr('class', 'viz-block' +
     (node.kind === 'supernet'    ? ' is-supernet'    : '') +
@@ -792,7 +839,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
     .attr('stroke', node.kind === 'supernet' ? css.line : 'rgba(0,0,0,0.2)')
     .attr('stroke-width', 1);
 
-  const label = fitCidrLabel(node.cidr, w);
+  const label = fitCidrLabel(node.cidr, w, node._parent && node._parent.cidr);
   if (label) {
     g.append('text')
       .attr('x', x + 8).attr('y', y + 14)
@@ -867,7 +914,7 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
         .attr('width', Math.max(0, pw - pad))
         .attr('height', innerH)
         .attr('rx', 2);
-      const fl = fitCidrLabel(p.cidr, pw);
+      const fl = fitCidrLabel(p.cidr, pw, node.cidr);
       if (fl) {
         fg.append('text')
           .attr('class', 'dark')
@@ -969,11 +1016,23 @@ function cidrLen(c) { return c.length * 6.6; }
 // then a short form that drops the octets shared with the parent
 // (".24.0/21"), else no label — hover still shows everything.
 const LABEL_PAD = 10;
-function shortCidr(cidr) { return cidr.replace(/^\d+\.\d+/, ''); }
-function fitCidrLabel(cidr, w) {
+// Elide only the leading octets the PARENT already establishes: a /16 parent
+// pins two, a /8 pins one. Dropping a fixed two octets made siblings
+// ambiguous — 10.0.0.0/16 and 10.1.0.0/16 both rendered as ".0.0/16" under a
+// /8. With no parent context we don't shorten at all.
+function shortCidr(cidr, parentCidr) {
+  if (!parentCidr) return '';
+  const fixed = Math.min(3, Math.floor(cidrInfo(parentCidr).prefix / 8));
+  if (fixed < 1) return '';
+  const [ip, p] = cidr.split('/');
+  const oct = ip.split('.'), pOct = parentCidr.split('/')[0].split('.');
+  for (let i = 0; i < fixed; i++) if (oct[i] !== pOct[i]) return '';
+  return '.' + oct.slice(fixed).join('.') + '/' + p;
+}
+function fitCidrLabel(cidr, w, parentCidr) {
   if (cidrLen(cidr) + LABEL_PAD <= w) return cidr;
-  const s = shortCidr(cidr);
-  if (cidrLen(s) + LABEL_PAD <= w) return s;
+  const s = shortCidr(cidr, parentCidr);
+  if (s && cidrLen(s) + LABEL_PAD <= w) return s;
   return '';
 }
 
@@ -1215,8 +1274,13 @@ function populateParentTagFilter() {
   }
 }
 
+// Escapes for BOTH text and attribute contexts. The compact strip
+// interpolates plan data into title="…", where an unescaped quote in an
+// imported name ("EA-Network Name" comes straight from someone else's CSV)
+// would close the attribute and let the rest parse as markup.
 function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function populateParents() {

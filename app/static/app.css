@@ -348,6 +348,17 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   gap: 24px;
   align-items: start;
 }
+/* The stage is ~800px on a 1440 laptop; minus the overview that leaves ~500px
+   for a row whose fixed columns alone wanted 542px, so the strip collapsed to
+   nothing and the figures overflowed. Shed the overview first, then the
+   secondary figures, before the strip gives up any width. */
+@media (max-width: 1600px) {
+  #viz.compact { grid-template-columns: minmax(0, 1fr) 180px; gap: 16px; }
+}
+@media (max-width: 1500px) {
+  #viz.compact { grid-template-columns: minmax(0, 1fr); }
+  #viz.compact .viz-overview { display: none; }
+}
 .viz-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .viz-row {
   background: var(--bg-1);
@@ -364,12 +375,24 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .viz-row.dim, .viz-row.dim-filter { opacity: 0.35; }
 .viz-row .vr-head {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr) 236px;
+  grid-template-columns: minmax(120px, 250px) minmax(60px, 1fr) minmax(0, 236px);
   gap: 16px;
   align-items: center;
   height: 40px;
   padding: 0 12px;
   cursor: pointer;
+}
+.viz-row .vr-head:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+/* Below this the figures cost more than they tell you — the utilization bar
+   and the byte counts go, the percentage stays. */
+@media (max-width: 1400px) {
+  .viz-row .vr-head { grid-template-columns: minmax(110px, 220px) minmax(60px, 1fr) auto; gap: 10px; }
+  .viz-row .vr-figs > span:first-child,
+  .viz-row .vr-figs .density-bar { display: none; }
 }
 .viz-row .vr-id {
   display: flex; align-items: baseline; gap: 10px; min-width: 0;
@@ -388,6 +411,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .viz-row .vr-strip .b.rv { background: var(--bg-3); border: 1px dashed var(--warn); box-sizing: border-box; }
 .viz-row .vr-strip .b.pp { background: transparent; border: 1px dashed var(--acc); box-sizing: border-box; min-width: 3px; }
 .viz-row .vr-strip .b.sub { opacity: 0.35; }
+.viz-row .vr-strip .b.dim-filter { opacity: 0.12; }
+.viz-row .vr-strip .b.sub.dim-filter { opacity: 0.06; }
 .viz-row .vr-strip .dv { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line-2); pointer-events: none; }
 .viz-row .vr-figs {
   display: flex; align-items: center; justify-content: flex-end; gap: 12px;
@@ -398,7 +423,11 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .viz-row .vr-figs .pct { width: 32px; text-align: right; color: var(--fg-1); font-weight: 500; }
 .viz-row .vr-figs .pct.hot { color: var(--warn); }
 .viz-row .vr-chip {
-  display: inline-flex; align-items: center; gap: 4px; width: fit-content;
+  display: inline-flex; align-items: center; gap: 4px;
+  /* fit-content + nowrap made this 308px wide in a 188px track, so it sat on
+     top of the figures. It may shrink; the text ellipsizes, the caret stays. */
+  width: fit-content; min-width: 0; max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   padding: 2px 8px;
   border: 1px solid color-mix(in oklab, var(--acc), transparent 60%);
   border-radius: 3px;
@@ -406,10 +435,16 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--acc);
   font-family: "JetBrains Mono", monospace; font-size: 10px; white-space: nowrap;
 }
-.viz-row .vr-chip svg { width: 10px; height: 10px; }
+.viz-row .vr-chip svg { width: 10px; height: 10px; flex: 0 0 auto; }
 .viz-row .vr-detail { padding: 0 12px 12px; }
 
-.viz-overview { position: sticky; top: 0; display: flex; flex-direction: column; gap: 10px; }
+/* One 9px bar + 3px gap per supernet: ~100 roots wanted 1200px, so the
+   sticky column ran off the bottom and the viewport box with it. Cap it to
+   the stage and let the bars scroll inside. */
+.viz-overview {
+  position: sticky; top: 0; display: flex; flex-direction: column; gap: 10px;
+  max-height: calc(100vh - 190px);
+}
 .viz-overview .ov-head {
   display: flex; justify-content: space-between;
   font-family: "JetBrains Mono", monospace; font-size: 11px;
@@ -419,8 +454,10 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .viz-overview .ov-bars {
   position: relative; display: flex; flex-direction: column; gap: 3px;
   padding: 6px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 4px;
+  min-height: 0; overflow-y: auto;
 }
-.viz-overview .ov-bar { height: 9px; background: var(--supernet); border-radius: 2px; overflow: hidden; cursor: pointer; }
+.viz-overview .ov-bar { height: 9px; flex: 0 0 auto; background: var(--supernet); border-radius: 2px; overflow: hidden; cursor: pointer; }
+.viz-overview .ov-bar:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
 .viz-overview .ov-bar:hover { outline: 1px solid var(--line-2); }
 .viz-overview .ov-bar i { display: block; height: 100%; background: var(--used); }
 .viz-overview .ov-bar.rv i { background: var(--warn); }
