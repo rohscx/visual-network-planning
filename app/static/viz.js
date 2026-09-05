@@ -105,24 +105,27 @@ function computeFree(parent) {
     .map(r => `${intToIp(r.start)}/${32 - Math.log2(r.size)}`);
 }
 // buildTree computes every node's direct gaps before summaries read them.
+// Composed from the children's own cached answers rather than re-walking the
+// whole subtree per call: utilColor() and every tree row ask for this, so the
+// re-walking version cost ~465ms to repaint a 671-node plan in "by util".
+// buildTree returns fresh node objects each load, so the cache expires itself.
 const subtreeFree = (root) => {
-  let total = 0;
-  let largest = null;
-  let largestSize = 0;
-  const walk = (node) => {
-    if (node.kind === 'reservation') return;
-    for (const cidr of node.free) {
-      const { size } = cidrInfo(cidr);
-      total += size;
-      if (size > largestSize) {
-        largest = cidr;
-        largestSize = size;
-      }
-    }
-    for (const child of node.children) walk(child);
-  };
-  walk(root);
-  return { total, largest };
+  if (root._subtreeFree) return root._subtreeFree;
+  // a reservation consumes its range outright — never carve-eligible
+  if (root.kind === 'reservation') return (root._subtreeFree = { total: 0, largest: null });
+  let total = 0, largest = null, largestSize = 0;
+  for (const cidr of root.free) {
+    const { size } = cidrInfo(cidr);
+    total += size;
+    if (size > largestSize) { largest = cidr; largestSize = size; }
+  }
+  for (const child of root.children) {
+    const cf = subtreeFree(child);
+    total += cf.total;
+    const cs = cf.largest ? cidrInfo(cf.largest).size : 0;
+    if (cs > largestSize) { largest = cf.largest; largestSize = cs; }
+  }
+  return (root._subtreeFree = { total, largest });
 };
 const capacityLabel = ({ total, largest }) => largest
   ? `largest /${cidrInfo(largest).prefix} · ${fmtBytes(total)} free`
@@ -398,7 +401,7 @@ function renderNode(node, isRoot) {
     if (!matches.self && !matches.descendant) el.classList.add('hidden');
   }
 
-  const used = usedAddresses(node);
+  const used = totalAddresses(node) - subtreeFree(node).total;
   const total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
   const pctLabel = node.kind === 'reservation' ? 'reserved' : `${pct}%`;
@@ -859,6 +862,42 @@ function dimmedByFilter(node) {
   return false;
 }
 
+function tickLaneHeight(node, innerW, innerH) {
+  return innerH >= 30 && node.children.some(c => c.size * innerW / node.size < 6) ? 5 : 0;
+}
+
+function drawTicks(svg, node, x, y, w, h, css) {
+  const groups = [];
+  for (const child of node.children) {
+    if (child.size * w / node.size >= 6) continue;
+    const left = Math.max(x, Math.min(x + w - 6, x + (child.start - node.start) * w / node.size));
+    const last = groups[groups.length - 1];
+    if (last && left < last.right) {
+      last.right = Math.max(last.right, left + 6);
+      last.nodes.push(child);
+    } else groups.push({ left, right: left + 6, nodes: [child] });
+  }
+  for (const group of groups) {
+    const first = group.nodes[0];
+    const g = svg.append('g')
+      .attr('class', 'viz-block viz-tick' +
+        (group.nodes.every(n => dimmedByFilter(n)) ? ' dim-filter' : '') +
+        (group.nodes.some(n => n.kind === 'reservation') ? ' is-reservation' : '') +
+        (group.nodes.some(n => SERVER.conflicts.some(pair => pair.includes(n.cidr))) ? ' conflict' : ''))
+      .attr('data-cidr', first.cidr)
+      .attr('data-cidrs', JSON.stringify(group.nodes.map(n => n.cidr)))
+      .attr('data-count', group.nodes.length);
+    g.append('rect').attr('class', 'body')
+      .attr('x', group.left).attr('y', y).attr('width', group.right - group.left)
+      .attr('height', h).attr('fill', fillFor(first, css));
+    if (group.nodes.length > 1) {
+      g.append('text').attr('x', (group.left + group.right) / 2).attr('y', y + h - 0.5)
+        .style('fill', labelInk(fillFor(first, css))).text(group.nodes.length);
+    }
+    bindHover(g.node(), first, group.nodes);
+  }
+}
+
 function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
   const padTop = depth === 0 ? 22 : 16;
   const pad = 2;
@@ -885,8 +924,8 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
 
   g.append('rect')
     .attr('class', 'body')
-    .attr('x', x + pad).attr('y', y + pad)
-    .attr('width', Math.max(0, w - 2*pad))
+    .attr('x', depth === 0 ? x + pad : x).attr('y', y + pad)
+    .attr('width', depth === 0 ? Math.max(0, w - 2*pad) : Math.max(1, w))
     .attr('height', Math.max(0, h - 2*pad))
     .attr('rx', 3)
     .attr('fill', fill)
@@ -932,34 +971,11 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
   const parentInfo = cidrInfo(node.cidr);
   const scale = innerW / parentInfo.size;
 
-  // Minimum visible width for non-free blocks. A /28 inside a /16 is 1/4096
-  // of the parent's width — about 0.24 px at 1000 px wide, i.e. invisible.
-  // Force allocations and reservations to render at least this wide, and
-  // shrink free pieces proportionally to compensate. Free pieces have no
-  // floor; a tiny gap can collapse to zero.
-  const MIN_BLOCK_PX = 6;
-  const naturalPw = pieces.map(p => p.size * scale);
-  let allocDeficit = 0;   // px we owe to undersized non-free pieces
-  let freeTotal = 0;      // px currently allocated to free pieces (donor pool)
-  for (let i = 0; i < pieces.length; i++) {
-    if (pieces[i].kind === 'free') {
-      freeTotal += naturalPw[i];
-    } else if (naturalPw[i] < MIN_BLOCK_PX) {
-      allocDeficit += (MIN_BLOCK_PX - naturalPw[i]);
-    }
-  }
-  const freeShrink = freeTotal > 0
-    ? Math.max(0, (freeTotal - allocDeficit) / freeTotal)
-    : 1;
-
-  let cursor = innerX;
-  for (let i = 0; i < pieces.length; i++) {
-    const p = pieces[i];
-    const pw = (p.kind === 'free')
-      ? naturalPw[i] * freeShrink
-      : Math.max(naturalPw[i], MIN_BLOCK_PX);
-    const px = cursor;
-    cursor += pw;
+  const laneH = tickLaneHeight(node, innerW, innerH);
+  const contentH = innerH - laneH;
+  for (const p of pieces) {
+    const pw = p.size * scale;
+    const px = innerX + (p.start - parentInfo.start) * scale;
 
     if (p.kind === 'free') {
       const fg = svg.append('g')
@@ -969,8 +985,8 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
       fg.append('rect')
         .attr('class', 'body')
         .attr('x', px).attr('y', innerY)
-        .attr('width', Math.max(0, pw - pad))
-        .attr('height', innerH)
+        .attr('width', pw)
+        .attr('height', contentH)
         .attr('rx', 2);
       const fl = fitCidrLabel(p.cidr, pw, node.cidr);
       if (fl) {
@@ -982,9 +998,10 @@ function drawNode(svg, node, x, y, w, h, depth, supernetRoot, css) {
       }
       bindHoverFree(fg.node(), p, node);
     } else {
-      drawNode(svg, p.node, px, innerY, pw, innerH, depth + 1, supernetRoot, css);
+      drawNode(svg, p.node, px, innerY, pw, contentH, depth + 1, supernetRoot, css);
     }
   }
+  if (laneH) drawTicks(svg, node, innerX, innerY + contentH, innerW, laneH, css);
 }
 
 function drawProposalOverlays(svg, root, x, y, w, h, css) {
@@ -995,12 +1012,8 @@ function drawProposalOverlays(svg, root, x, y, w, h, css) {
     const pi = cidrInfo(p.cidr);
     if (pi.start < rootInfo.start || pi.end > rootInfo.end) continue;
 
-    // If a viz block already exists at exactly this CIDR (e.g. the user
-    // clicked a free block — the proposal IS that block), just promote
-    // the existing element to .proposed instead of drawing a separate
-    // overlay. Avoids the doubled-up rectangle the user reported when a
-    // free block's natural-scale position drifts from the cursor-based
-    // position from drawNode's min-block-px redistribution.
+    // reuse exact matches: their proportional geometry already accounts
+    // for any space taken by the tick lane.
     const existing = svg.node().querySelector(
       `.viz-block[data-cidr="${CSS.escape(p.cidr)}"]`
     );
@@ -1017,7 +1030,8 @@ function drawProposalOverlays(svg, root, x, y, w, h, css) {
           const padTop = (host === root) ? 22 : 16;
           const pad = 2;
           const innerY = hostY + padTop;
-          const innerH = Math.max(0, hostH - padTop - pad);
+          const availableH = Math.max(0, hostH - padTop - pad);
+          const innerH = availableH - tickLaneHeight(host, Math.max(0, hostW - 2 * pad), availableH);
           const innerX = hostX + pad;
           const innerW = Math.max(0, hostW - 2 * pad);
           const hostInfo = cidrInfo(host.cidr);
@@ -1033,21 +1047,21 @@ function drawProposalOverlays(svg, root, x, y, w, h, css) {
     const padTop = (host === root) ? 22 : 16;
     const pad = 2;
     const innerY = hostY + padTop;
-    const innerH = Math.max(0, hostH - padTop - pad);
+    const availableH = Math.max(0, hostH - padTop - pad);
+    const innerH = availableH - tickLaneHeight(host, Math.max(0, hostW - 2 * pad), availableH);
     const innerX = hostX + pad;
     const innerW = Math.max(0, hostW - 2 * pad);
     const hostInfo = cidrInfo(host.cidr);
     const scale = innerW / hostInfo.size;
     const px = innerX + (pi.start - hostInfo.start) * scale;
-    // Mirror the min-width treatment in drawNode so tiny proposed carves
-    // (e.g. /28 in a /16) remain visible during preview.
-    const pw = Math.max(pi.size * scale, 6);
+    // a one-pixel floor keeps previews visible without moving adjacent space.
+    const pw = Math.max(pi.size * scale, 1);
 
     const og = svg.append('g').attr('class', 'viz-block proposed').attr('data-cidr', p.cidr);
     og.append('rect')
       .attr('class', 'body')
       .attr('x', px).attr('y', innerY)
-      .attr('width', Math.max(0, pw - pad))
+      .attr('width', pw)
       .attr('height', innerH)
       .attr('rx', 2);
     if (pw > 50) {
@@ -1060,11 +1074,14 @@ function drawProposalOverlays(svg, root, x, y, w, h, css) {
   }
 }
 
-function utilColor(node) {
-  const used = usedAddresses(node), total = totalAddresses(node);
-  const pct = total > 0 ? used/total : 0;
-  const hue = 165 - pct * 130;
-  return `oklch(0.66 0.13 ${hue})`;
+function utilColor(nodeOrPct) {
+  const pct = typeof nodeOrPct === 'number'
+    ? nodeOrPct
+    : totalAddresses(nodeOrPct) > 0
+      ? (totalAddresses(nodeOrPct) - subtreeFree(nodeOrPct).total) / totalAddresses(nodeOrPct)
+      : 0;
+  // lightness carries utilization even when hue cannot be distinguished.
+  return `oklch(${0.82 - 0.48 * Math.max(0, Math.min(1, pct))} 0.07 260)`;
 }
 function cidrLen(c) { return c.length * 6.6; }
 
@@ -1117,11 +1134,9 @@ function applySelectionVisual() {
   // would mark *both* the block and its proposal overlay as selected.
   for (const el of document.querySelectorAll('#viz .viz-block:not(.proposed)')) {
     const cidr = el.getAttribute('data-cidr');
-    el.classList.toggle('selected', !!sel && cidr === sel);
-    const isLineage = !sel
-      || cidr === sel
-      || isSubnetOf(cidr, sel)
-      || isSubnetOf(sel, cidr);
+    const cidrs = el.dataset.cidrs ? JSON.parse(el.dataset.cidrs) : [cidr];
+    el.classList.toggle('selected', !!sel && cidrs.includes(sel));
+    const isLineage = !sel || cidrs.some(c => c === sel || isSubnetOf(c, sel) || isSubnetOf(sel, c));
     el.classList.toggle('dim', !!sel && !isLineage);
   }
   // Compact-mode rows carry the same selected / lineage-dim treatment.
@@ -1142,10 +1157,15 @@ function selectCidr(cidr) {
 }
 
 const tooltip = document.getElementById('tooltip');
-function bindHover(el, node) {
+function bindHover(el, node, nodes = [node]) {
   el.addEventListener('mouseenter', (e) => {
     el.classList.add('hover');
-    showTooltip(e, tooltipForNode(node));
+    const records = nodes.length > 1
+      ? `<div class="tip-name">${nodes.length} records · click repeatedly to cycle</div>` +
+        nodes.slice(0, 8).map(n => `<div>${escapeHtml(n.cidr)} · ${escapeHtml(n.name || 'unnamed')}</div>`).join('') +
+        (nodes.length > 8 ? `<div>+${nodes.length - 8} more</div>` : '')
+      : '';
+    showTooltip(e, tooltipForNode(node) + records);
   });
   el.addEventListener('mousemove', (e) => positionTooltip(e));
   el.addEventListener('mouseleave', () => {
@@ -1154,8 +1174,10 @@ function bindHover(el, node) {
   });
   el.addEventListener('click', (e) => {
     e.stopPropagation();
-    selectCidr(node.cidr);
-    openDetail(node.cidr);   // mirror tree-row click: open the editor too
+    const selected = nodes.findIndex(n => n.cidr === STATE.selectedCidr);
+    const target = nodes[(selected + 1) % nodes.length];
+    selectCidr(target.cidr);
+    openDetail(target.cidr);   // mirror tree-row click: open the editor too
   });
 }
 function bindHoverFree(el, p, parent) {
@@ -1173,7 +1195,7 @@ function bindHoverFree(el, p, parent) {
   });
 }
 function tooltipForNode(node) {
-  const used = usedAddresses(node), total = totalAddresses(node);
+  const used = totalAddresses(node) - subtreeFree(node).total, total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
   const ownSet = new Set(node.tags || []);
   const ownChips = (node.tags || []).map(t =>
@@ -1716,7 +1738,7 @@ function openDetail(cidr) {
   const needsReplay = wasOpen && STATE.detailCidr !== cidr;
   if (needsReplay) detail.classList.remove('on');
   STATE.detailCidr = cidr;
-  const used = usedAddresses(node), total = totalAddresses(node);
+  const used = totalAddresses(node) - subtreeFree(node).total, total = totalAddresses(node);
   const pct = total > 0 ? Math.round(100 * used / total) : 0;
   document.getElementById('detailKind').textContent = `${node.kind} detail`;
   // Sync the type segmented control to this record's current kind. saveDetail
@@ -1831,7 +1853,7 @@ function updateBreadcrumbs() {
   let totalAddrs = 0, usedAddrs = 0;
   for (const r of TREE.roots.filter(x=>x.kind==='supernet')) {
     totalAddrs += r.size;
-    usedAddrs  += usedAddresses(r);
+    usedAddrs  += r.size - subtreeFree(r).total;
   }
   const pct = totalAddrs ? Math.round(1000 * usedAddrs / totalAddrs) / 10 : 0;
   document.getElementById('badgeSupers').textContent = `${nSuper} supernet${nSuper===1?'':'s'}`;
@@ -2137,9 +2159,9 @@ function updateLegend() {
     lg.innerHTML = top.map(t => `<span><span class="swatch" style="background:${tagColor(t)}"></span>${t}</span>`).join('') || '<span style="color:var(--fg-2)">no tags</span>';
   } else if (STATE.colorMode === 'util') {
     lg.innerHTML = `
-      <span><span class="swatch" style="background:oklch(0.66 0.13 165)"></span>0%</span>
-      <span><span class="swatch" style="background:oklch(0.66 0.13 100)"></span>50%</span>
-      <span><span class="swatch" style="background:oklch(0.66 0.13 35)"></span>100%</span>`;
+      <span><span class="swatch" style="background:${utilColor(0)}"></span>0%</span>
+      <span><span class="swatch" style="background:${utilColor(0.5)}"></span>50%</span>
+      <span><span class="swatch" style="background:${utilColor(1)}"></span>100%</span>`;
   } else {
     lg.innerHTML = `
       <span><span class="swatch" style="background: var(--used)"></span>allocated</span>

@@ -7,7 +7,8 @@ Conventions for contributors — both human and AI — working on this repo.
 - **Purpose:** local, single-user, web-based IPv4 network range planning.
 - **Stack:** Python + Flask + Jinja2 + vanilla JS + D3 (CDN). No build step,
   no database. Standard-library `ipaddress` handles all CIDR math.
-- **Entry point:** `run.py` serves the app on `http://127.0.0.1:5000`.
+- **Entry point:** `python3 run.py` serves the app on `http://127.0.0.1:5050`.
+  (Not 5000 — macOS AirPlay Receiver squats that port and returns 403.)
 
 Read [README.md](README.md) first for the user-facing overview.
 
@@ -83,6 +84,67 @@ When adding logic that iterates "everything in the plan," use
 `planning._all_owned_pairs(plan)` to get all three kinds at once — don't
 write a new `supernets + allocations` chain that silently skips
 reservations.
+
+## Utilization: two different numbers, on purpose
+
+`build_tree` puts two counts on every node and they answer different
+questions. Mixing them up produces figures that look like bugs.
+
+- `used_addresses` — sum of the **direct children's** sizes. "How much of
+  this block is covered by declared children?" A /16 tiled by four /18
+  containers is 100% here even when those /18s are empty.
+- `free_addresses` — **carve-eligible free space across the whole subtree**.
+  Recurses through descendants, and stops at reservations: a reservation
+  consumes its range but is never carved into, so its interior is not free.
+
+**Everything the user sees as "utilization" is `total - free_addresses`**, and
+that is true on both sides of the wire: `routes.py` for the server-rendered
+plans index, and `subtreeFree()` in `viz.js` for the topbar badge, sidebar,
+tree rows, tooltips, detail panel, per-supernet summaries, overview bars and
+the `by util` gradient. The two implementations must agree — if you change the
+rule in one, change it in the other, and check a plan with nested containers
+where the two bases visibly differ.
+
+`subtreeFree()` caches on the node (`_subtreeFree`) and composes from its
+children rather than re-walking. `buildTree` returns fresh node objects on
+every load, so the cache invalidates itself — don't add manual invalidation,
+and don't mutate tree nodes in place after `buildTree`.
+
+## Viz invariants (`app/static/viz.js`)
+
+- **Geometry is honest.** Blocks are laid out at their true proportional
+  width and position, computed from `start` — never from a running cursor.
+  Nothing is allowed to steal width from free space to make itself visible;
+  an earlier version did, and a nearly-empty supernet looked full. Allocations
+  get a 1px visual floor and nothing more. Sub-6px children stay reachable via
+  the tick lane at the bottom of the parent, which *consumes* layout space
+  rather than overlaying (an overlay would swallow clicks meant for the free
+  blocks underneath).
+- **Label ink is measured, not assumed.** `labelInk()` resolves any fill —
+  including the runtime `oklch()` colors tag and utilization modes generate —
+  through a 1px canvas and picks dark or light ink from its luminance. Don't
+  hardcode a light label color. Reservations are the deliberate exception:
+  they keep warn-yellow, which is a semantic cue, not a contrast compromise.
+- **`escapeHtml()` is attribute-safe** — it escapes quotes as well as
+  `& < >`, because plan data is interpolated into `title="…"`. Names arrive
+  from imported CSVs, i.e. from someone else's file. Keep it that way.
+- **Two densities.** `detail` draws the nested rectangles; `compact` draws one
+  row per supernet with an expand-in-place detail. Anything added to one
+  should have an answer for the other.
+
+## Color and contrast
+
+Dark theme only. Before adding or changing a color token, check it:
+
+- Body and secondary text: **>= 4.5:1** against its background (`--fg-2`).
+- Decorative marks and non-text: **>= 3:1** (`--fg-3`). If a user has to read
+  it to make a decision, it is not decorative — use `--fg-2`.
+- **A sequential scale must vary lightness**, not just hue. The utilization
+  gradient used to run green -> yellow -> orange at one lightness, which is
+  unreadable with red-green color-vision deficiency and in greyscale. It is
+  now monotonic in lightness; keep any replacement monotonic too.
+- Mint (`--acc`) means action / selection / proposal. Don't spend it on
+  static state.
 
 ## Carve modes
 
@@ -197,3 +259,8 @@ Before opening a PR:
   Model conflicts as duplicates + orphans + misalignment, not as overlap.
 - **Writing example plans into `plans/`:** that directory is per-user data.
   Put example fixtures under `tests/` if they're needed.
+- **Mixing up `used_addresses` and `free_addresses`:** see the utilization
+  section. If a percentage you print disagrees with one the user can see
+  elsewhere, you have almost certainly used the wrong one.
+- **Making a block visible by widening it:** free space is the answer this
+  tool exists to give. Never inflate a block at its expense.

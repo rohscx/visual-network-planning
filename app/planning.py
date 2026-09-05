@@ -88,7 +88,11 @@ def build_tree(plan: Plan) -> dict:
             "free": [cidr_str, ...],   # free ranges directly under this node
             "total_addresses": int,
             "used_addresses": int,     # sum of direct children (incl. reservations)
+            "free_addresses": int,     # carve-eligible free space across the subtree
         }
+    used_addresses measures coverage by declared direct children, not utilization.
+    free_addresses sums direct gaps and descendant free space, excluding leaf
+    allocations and entire reservation subtrees; utilization is total minus free.
     """
     supernets = [(s, parse(s.cidr), "supernet") for s in plan.supernets]
     allocs = [(a, parse(a.cidr), "allocation") for a in plan.allocations]
@@ -139,6 +143,10 @@ def build_tree(plan: Plan) -> dict:
         children = [make_node(c) for c in children_of[i]]
         free = _free_space(net, direct_nets)
         used_addresses = sum(c.num_addresses for c in direct_nets)
+        free_addresses = 0
+        if kind != "reservation" and (kind == "supernet" or children):
+            free_addresses = (sum(f.num_addresses for f in free)
+                              + sum(c["free_addresses"] for c in children))
         return {
             "cidr": str(net),
             "name": rec.name,
@@ -151,6 +159,7 @@ def build_tree(plan: Plan) -> dict:
             "free": [str(f) for f in free],
             "total_addresses": net.num_addresses,
             "used_addresses": used_addresses,
+            "free_addresses": free_addresses,
         }
 
     # Iterating `order` keeps roots in (address, prefixlen) order for free.

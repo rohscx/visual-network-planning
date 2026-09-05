@@ -68,11 +68,11 @@ def _plan_metadata(name: str) -> dict:
     orphans = planning.find_orphans(plan)
 
     total_addresses = 0
-    used_addresses = 0
+    free_addresses = 0
     for root in tree["roots"]:
         total_addresses += root["total_addresses"]
-        used_addresses += root["used_addresses"]
-    pct = round(100 * used_addresses / total_addresses, 1) if total_addresses else 0.0
+        free_addresses += root["free_addresses"]
+    pct = round(100 * (total_addresses - free_addresses) / total_addresses, 1) if total_addresses else 0.0
 
     if plan.supernets:
         scope = ", ".join(s.cidr for s in plan.supernets[:2])

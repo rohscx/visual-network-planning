@@ -1342,3 +1342,9 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--fg-2);
 }
 .empty .empty-hints span { display: inline-flex; align-items: center; gap: 6px; }
+
+.viz-block.viz-tick text {
+  font-size: 5px;
+  text-anchor: middle;
+  pointer-events: none;
+}

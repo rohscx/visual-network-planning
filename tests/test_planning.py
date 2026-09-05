@@ -85,6 +85,36 @@ def test_build_tree_nests_grandchild_under_child():
     assert child["children"][0]["cidr"] == "10.0.1.0/25"
 
 
+def test_build_tree_subtree_free_with_leaf_allocation():
+    root = build_tree(_plan(
+        supernets=[("192.0.2.0/24", "")],
+        allocations=[("192.0.2.0/26", "")],
+    ))["roots"][0]
+    assert root["free_addresses"] == 192
+    assert root["children"][0]["free_addresses"] == 0
+
+
+def test_build_tree_subtree_free_with_nested_container():
+    root = build_tree(_plan(
+        supernets=[("192.0.2.0/24", "")],
+        allocations=[("192.0.2.0/25", ""), ("192.0.2.0/26", "")],
+    ))["roots"][0]
+    assert root["used_addresses"] == 128
+    assert root["free_addresses"] == 192
+    assert root["children"][0]["free_addresses"] == 64
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_build_tree_subtree_free_stops_at_reservation(nested):
+    root = build_tree(_plan(
+        supernets=[("192.0.2.0/24", "")],
+        reservations=[("192.0.2.0/25", "")],
+        allocations=[("192.0.2.0/26", ""), ("192.0.2.0/27", "")] if nested else [],
+    ))["roots"][0]
+    assert root["free_addresses"] == 128
+    assert root["children"][0]["free_addresses"] == 0
+
+
 def test_build_tree_identifies_orphans():
     plan = _plan(
         supernets=[("10.0.0.0/16", "")],
