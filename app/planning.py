@@ -341,8 +341,48 @@ def _request_parent(records, parent):
     return None
 
 
+def effective_parent_tags(plan: Plan) -> dict[str, list[str]]:
+    """Derive own-first inherited tags from the same tree used by the UI."""
+    tags = {}
+
+    def visit(node, inherited):
+        effective = list(dict.fromkeys(node['tags'] + inherited))
+        tags[node['cidr']] = effective
+        for child in node['children']:
+            visit(child, effective)
+
+    for root in build_tree(plan)['roots']:
+        visit(root, [])
+    return tags
+
+
+class RequestExpansionError(ValueError):
+    pass
+
+
+def resolve_request_parents(plan: Plan, document: dict, max_allocations: int) -> list[dict]:
+    inventory = request_parent_inventory(plan)[0] if any(
+        'parent_filter' in item for item in document['items']) else []
+    resolutions = []
+    expansion = 0
+    for item in document['items']:
+        selector = item.get('parent_filter')
+        parents = ([p['cidr'] for p in inventory if all(
+            any(tag in p['tags'] for tag in group) for group in selector['groups'])]
+            if selector is not None else list(item['parents']))
+        resolutions.append(dict(item_id=item['id'], parent_filter=selector,
+                                matched_parents=len(parents), resolved_parents=parents))
+        expansion += len(parents) * item['repeat'] * item.get('count', 1)
+    if expansion > max_allocations:
+        counts = '; '.join(f"{r['item_id']}: {'filter matched' if r['parent_filter'] is not None else 'explicit'} "
+                           f"{r['matched_parents']} parents" for r in resolutions)
+        raise RequestExpansionError(f"{counts}; expansion {expansion} exceeds cap {max_allocations} allocations")
+    return resolutions
+
+
 def request_parent_inventory(plan: Plan) -> tuple[list[dict], list[dict]]:
     records = _request_records(plan)
+    effective = effective_parent_tags(plan)
     parents, warnings, seen = [], [], set()
     for rec, net, kind in records:
         if net in seen:
@@ -355,6 +395,7 @@ def request_parent_inventory(plan: Plan) -> tuple[list[dict], list[dict]]:
         free = _free_space(net, [n for _, n, _ in records if n != net])
         if free:
             parents.append(dict(cidr=str(net), name=rec.name, kind=kind,
+                                tags=effective.get(str(net), list(dict.fromkeys(rec.tags))),
                                 direct_free_cidrs=list(map(str, free)),
                                 direct_free_addresses=sum(n.num_addresses for n in free),
                                 largest_free_cidr=str(max(free, key=lambda n: n.num_addresses))))
@@ -365,15 +406,17 @@ def simulate_carve_request(plan: Plan, document: dict, max_allocations: int) -> 
     """Simulate a normalized, bounded request without mutating any input record."""
     import re
 
-    expansion = sum(len(i['parents']) * i['repeat'] * i.get('count', 1) for i in document['items'])
-    if expansion > max_allocations:
-        raise ValueError('Request expansion exceeds allocation cap')
+    resolutions = resolve_request_parents(plan, document, max_allocations)
     working = Plan.from_dict(plan.to_dict())
     original = _request_records(plan)
     counters, results = {}, []
-    for item in document['items']:
+    for item, resolution in zip(document['items'], resolutions):
+        if not resolution['resolved_parents']:
+            results.append(dict(item_id=item['id'], parent=None, iteration=None,
+                                status='no_matching_parents', reason_code='empty_filter_match',
+                                message='Tag filter matched zero eligible parents', conflicts=[], proposals=[]))
         mode = next(k for k in ('prefix_length', 'host_count', 'count') if k in item)
-        for parent_index, cidr in enumerate(item['parents']):
+        for parent_index, cidr in enumerate(resolution['resolved_parents']):
             parent = parse(cidr)
             issue = _request_parent(original, parent)
             for iteration in range(item['repeat']):
@@ -421,7 +464,7 @@ def simulate_carve_request(plan: Plan, document: dict, max_allocations: int) -> 
                                   conflicts=[dict(kind=k, cidr=str(n), name=r.name) for r, n, k in failure[3]])
                 results.append(result)
     successes = sum(r['status'] == 'will_succeed' for r in results)
-    return dict(results=results, summary=dict(attempts=len(results), successful_attempts=successes,
+    return dict(resolutions=resolutions, results=results, summary=dict(attempts=len(results), successful_attempts=successes,
                 failed_attempts=len(results) - successes,
                 proposed_allocations=sum(len(r['proposals']) for r in results), all_fit=successes == len(results)))
 

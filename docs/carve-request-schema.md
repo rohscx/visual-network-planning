@@ -14,19 +14,18 @@ Nothing is transmitted to a model by this app.
   "version": 1,
   "items": [
     {
-      "id": "web",
-      "parents": ["192.0.2.0/24"],
-      "repeat": 2,
-      "prefix_length": 28,
-      "name_template": "{parent}.web-{n}",
-      "tags": ["web", "prod"],
-      "description": "Application subnets"
+      "id": "app",
+      "parent_filter": {"groups": [["prod"], ["us-east1", "us-west2"]]},
+      "prefix_length": 27,
+      "name_template": "{parent}.payments.app",
+      "tags": ["payments", "app"],
+      "description": "Payments application subnets"
     }
   ]
 }
 ```
 
-The example parent must exist in your plan. Requests never contain output
+The example selects prod AND (us-east1 OR us-west2). Requests never contain output
 CIDRs: the server chooses them. A prompt is a snapshot, not reserved capacity.
 
 ## Grammar and limits
@@ -42,7 +41,8 @@ Each item has:
 | Field | Rule |
 | --- | --- |
 | `id` | Required; unique; `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` |
-| `parents` | Required; 1–256 distinct strict aligned IPv4 CIDRs with numeric prefixes; canonicalized |
+| `parents` | Alternative to `parent_filter`; 1–256 distinct strict aligned IPv4 CIDRs with numeric prefixes; canonicalized |
+| `parent_filter` | Alternative to `parents`; object with only `groups`: 1–8 arrays of 1–64 distinct trimmed tag strings, each 1–64 characters |
 | `prefix_length` | Integer 0–32; first aligned free slot |
 | `host_count` | Integer 1–4294967294; smallest block covering hosts **plus two** addresses, even for one or two hosts |
 | `count` | Power-of-two integer 1–256; entire equal split of an entirely empty parent |
@@ -52,8 +52,29 @@ Each item has:
 | `tags` | At most 32 trimmed strings of 1–64 characters; default empty array; order and duplicates preserved |
 
 Exactly one of `prefix_length`, `host_count`, or `count` is required.
-The worst-case expansion `sum(len(parents) * repeat * (count or 1))` must not
-exceed 256, even when some attempts will fail. No tags are implicitly inherited.
+Exactly one of `parents` or `parent_filter` is required, even if either value
+is null. Filter tags are case-sensitive, OR within each group and AND across
+groups. Empty groups, non-strings, duplicate tags within a group (after trimming),
+and unknown filter fields are rejected. Group and tag order are preserved.
+Filters match effective tags: own tags first, then nearest-to-farthest ancestor
+tags, de-duplicated, using the same containment tree as the carve chips.
+
+The worst-case expansion `sum(len(resolved_parents) * repeat * (count or 1))`
+must not exceed 256, even when attempts will fail. Filter shape is validated
+without guessing its match count. Preview and commit resolve all selectors
+against the original eligible inventory and enforce the combined cap before
+simulation. An over-cap request returns 422/`expansion_limit`, with each item's
+parent count and the total expansion versus the cap; no items are simulated or
+saved. Explicit-only requests retain their existing early schema cap check.
+Proposal tags are never implicitly inherited.
+
+Use `prefix_length` by default with the ticket's prefix; use `host_count` only
+when the ticket specifies hosts, and `count` only for an explicit equal split
+of an empty parent. Leave `repeat` at its default 1 unless several subnets of
+the same size per parent are requested. The naming convention is
+`{parent}.<workload>.<app|db>`, e.g. `{parent}.payments.app`. Keep `{parent}`
+literal for server expansion. Append `{n}` only for repeats above 1 or multiple
+items targeting the same parent. This convention does not restrict valid names.
 
 Only `{parent}` and `{n}` are permitted in a name template. Other or unmatched
 braces, expressions, formatting specifiers, and escapes are rejected. Parent
@@ -65,6 +86,7 @@ Resolved names can exceed the template's length limit.
 ## Simulation
 
 Execution order is items, parents, repeats, then ascending split children.
+Filters preserve inventory order; explicit lists preserve supplied order.
 Each prefix/hosts iteration requests one subnet; each count iteration requests
 a whole split. Earlier successes consume space. Failed attempts consume neither
 space nor name numbers. An entire split succeeds or fails together; `count:1`
@@ -80,9 +102,24 @@ Direct free space excludes existing child containers, even when their own
 subtrees have space. A fully tiled parent is omitted from prompt inventory;
 its eligible descendants can appear independently. Total free addresses do
 not guarantee an aligned prefix fits. No overlapping capacities are summed.
-The prompt includes canonical parents, names, kinds, direct free CIDRs, direct
-free counts, largest free CIDR, and warnings for excluded records. Empty
-inventory is valid. Plan strings are delimited untrusted data in the prompt.
+The prompt includes effective tag vocabulary with eligible-parent counts, sorted
+by count descending then tag ascending, capped at 100 with an omitted count.
+At most three samples show the full parent record shape (including effective
+`tags`): largest, smallest, then near-median direct free space, with stable
+inventory-order ties and repeated sample indices removed. Samples are explicitly
+not a target list. Aggregates report eligible-parent count, total direct free
+addresses, and largest-free-prefix distribution. Warning counts are grouped by
+code. The complete inventory is not embedded in the prompt. Plan name, revision,
+and all derived data remain inside the untrusted-data fence. Empty inventory is
+valid. The prompt endpoint retains its full `parents` and `warnings` API fields.
+
+Filters resolve only eligible parents with direct free space, excluding all the
+ineligible cases above. A zero match produces one non-fatal item result with
+`parent:null`, `iteration:null`, no proposals, and `empty_filter_match`.
+Sibling items continue. The response also includes `resolutions`, one entry per
+item: `item_id`, `parent_filter` (null for explicit lists), `matched_parents`
+(count), and `resolved_parents` (ordered CIDRs). REQUEST shows this selector,
+count and full resolved list before commit. No filter-authoring UI is added.
 
 Simulation does not modify the Plan. Each attempt reports `item_id`, `parent`,
 one-based `iteration`, `status`, `reason_code`, `message`, `conflicts`, and
@@ -97,6 +134,7 @@ IDs are `item_id:parent_index:repeat_index:child_index`, with zero-based indices
 | `conflicts_existing` | `conflict` | “Resolve conflict” |
 | `parent_not_found` | `missing_parent` | “Choose an existing parent” |
 | `parent_is_reservation` | `reserved_parent` | “Choose an unreserved parent” |
+| `no_matching_parents` | `empty_filter_match` | “No matching parents” |
 
 Detailed distinctions such as fragmentation, ineligible leaves, duplicate
 records, or reservation ancestors are explanatory text, not extra codes.
@@ -110,7 +148,7 @@ All responses are JSON with `Cache-Control: no-store`.
   `warnings` (`code`, `cidr`, `message`), and complete copyable `prompt`.
 - `POST /plans/<name>/carve_request/preview`: `application/json`, body exactly
   the versioned document. Returns 200 with `ok:true`, `valid:true`,
-  `plan_revision`, all `results`, and `summary` (`attempts`,
+  `plan_revision`, `resolutions`, all `results`, and `summary` (`attempts`,
   `successful_attempts`, `failed_attempts`, `proposed_allocations`, `all_fit`).
   Valid requests return 200 even when no attempt succeeds.
 - `POST /plans/<name>/commit_carve`: adds this mutually exclusive form:

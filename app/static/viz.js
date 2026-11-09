@@ -1691,12 +1691,31 @@ function renderRequestResults() {
   const wrap = requestEl('requestResults');
   wrap.replaceChildren();
   const labels = {capacity: 'Does not fit', conflict: 'Resolve conflict',
-    missing_parent: 'Choose an existing parent', reserved_parent: 'Choose an unreserved parent'};
+    missing_parent: 'Choose an existing parent', reserved_parent: 'Choose an unreserved parent',
+    empty_filter_match: 'No matching parents'};
+  // Render the filter the way the carve tab's chips read — "prod AND
+  // (us-east1 OR us-west2)" — so a filter that matched more or fewer
+  // parents than expected is legible before commit, not raw JSON.
+  const filterText = (groups) => groups
+    .map(g => g.length > 1 ? `(${g.join(' OR ')})` : g[0])
+    .join(' AND ');
+  for (const resolution of REQUEST.preview.resolutions || []) {
+    const row = document.createElement('p');
+    const selector = resolution.parent_filter
+      ? `filter ${filterText(resolution.parent_filter.groups)}` : 'explicit parents';
+    const shown = resolution.resolved_parents.slice(0, 12);
+    const rest = resolution.resolved_parents.length - shown.length;
+    const list = shown.join(', ') + (rest > 0 ? ` +${rest} more` : '');
+    row.textContent = `${resolution.item_id} · ${selector} · `
+      + `${resolution.matched_parents} ${plural(resolution.matched_parents, 'parent')} matched`
+      + (list ? `: ${list}` : '');
+    wrap.appendChild(row);
+  }
   for (const result of REQUEST.preview.results) {
     const row = document.createElement('div');
     row.className = 'request-attempt';
     const heading = document.createElement('div');
-    heading.textContent = `${result.item_id} · ${result.parent} · attempt ${result.iteration}`;
+    heading.textContent = result.parent === null ? result.item_id : `${result.item_id} · ${result.parent} · attempt ${result.iteration}`;
     row.appendChild(heading);
     const reason = document.createElement('p');
     reason.textContent = `${labels[result.reason_code] || 'Fits'}: ${result.message}`;

@@ -371,3 +371,38 @@ def test_calculator_input_error_from_calculation_is_422(client, calculator_plan,
     assert body['field'] == 'input'
     assert body['suggested_cidr'] == '192.0.2.0/24'
     assert r.headers['Cache-Control'] == 'no-store'
+
+
+def test_filtered_preview_commit_cap_and_immutability(client, request_plan, monkeypatch):
+    request_plan['plan'].supernets = [Allocation(f'10.0.{i}.0/24', '', tags=['prod']) for i in range(5)]
+    before = request_plan['plan'].to_dict()
+    doc = dict(version=1, items=[dict(id='app', parent_filter={'groups': [['prod']]}, prefix_length=30, repeat=2)])
+    preview = client.post('/plans/request/carve_request/preview', json=doc)
+    assert preview.status_code == 200
+    assert preview.json['resolutions'][0]['matched_parents'] == 5
+    assert request_plan['plan'].to_dict() == before
+    payload = dict(carve_request=doc, plan_revision=preview.json['plan_revision'], selection='fitting',
+                   selected_proposal_ids=['app:0:0:0'])
+    monkeypatch.setattr(routes, '_MAX_COMMIT_ALLOCS', 9)
+    for endpoint, body in [('carve_request/preview', doc), ('commit_carve', payload)]:
+        response = client.post('/plans/request/' + endpoint, json=body)
+        assert response.status_code == 422
+        assert response.json['code'] == 'expansion_limit'
+        assert 'filter matched 5 parents' in response.json['error']
+        assert 'expansion 10 exceeds cap 9' in response.json['error']
+        assert request_plan['plan'].to_dict() == before
+        assert request_plan['saves'] == 0
+    monkeypatch.setattr(routes, '_MAX_COMMIT_ALLOCS', 11)
+    assert client.post('/plans/request/commit_carve', json=payload).status_code == 200
+    assert request_plan['saves'] == 1
+
+
+def test_empty_filter_keeps_sibling_proposals(client, request_plan):
+    doc = request_doc()
+    doc['items'].append(dict(id='empty', parent_filter={'groups': [['missing']]}, prefix_length=28))
+    response = client.post('/plans/request/carve_request/preview', json=doc)
+    assert response.status_code == 200
+    assert response.json['results'][1]['reason_code'] == 'empty_filter_match'
+    assert response.json['summary']['proposed_allocations'] == 1
+    payload = envelope(client, doc)
+    assert client.post('/plans/request/commit_carve', json=payload).status_code == 200

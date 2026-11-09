@@ -85,7 +85,12 @@ there exactly as in detail). The choice is remembered per browser, and
   `{parent}` and `{n}` (e.g. `{parent}.elb-{n}`, `{n}` resets per parent).
 - **Request** — copy a fresh server-generated prompt, ask your model for a
   versioned JSON carve request, then paste it or load a `.json` file in the
-  REQUEST tab. Check/preview shows each attempt and dashed mint proposals.
+  REQUEST tab. Requests normally select parents by tag groups (OR within,
+  AND across), including inherited tags; explicit parent CIDRs remain supported.
+  The prompt contains tag counts, up to three samples and capacity summaries.
+  Check/preview shows each filter, its match count and resolved parent list,
+  plus each attempt and dashed mint proposals. Requests exceeding 256 expanded
+  allocations are refused with counts; a zero-match item leaves siblings usable.
   Select the successful allocations you want and explicitly commit them.
   This path re-simulates server-side, rejects stale previews, and saves all
   selected entries or none. Files only load text; no external model is called.

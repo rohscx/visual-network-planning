@@ -682,3 +682,58 @@ def test_calculator_no_truncation_and_invalid_plan():
     with pytest.raises(ValueError):
         calculate_network('192.0.2.0/24', plan)
     assert plan == before
+
+
+def test_filter_semantics_effective_tags_and_inventory_order():
+    from app.carve_request import normalize
+    from app.planning import effective_parent_tags, simulate_carve_request
+    plan = Plan('filter', supernets=[Allocation('192.0.2.0/24', '', tags=['prod', 'shared']),
+                                    Allocation('198.51.100.0/24', '', tags=['test', 'west'])],
+                allocations=[Allocation('192.0.2.0/25', '', tags=['east', 'shared']),
+                             Allocation('192.0.2.0/28', '')])
+    before = plan.to_dict()
+    assert effective_parent_tags(plan)['192.0.2.0/25'] == ['east', 'shared', 'prod']
+    for groups, expected in [([['prod'], ['east', 'west']], ['192.0.2.0/25']),
+                             ([['prod', 'test']], ['192.0.2.0/24', '198.51.100.0/24', '192.0.2.0/25']),
+                             ([['missing']], [])]:
+        doc = normalize(dict(version=1, items=[dict(id='app', parent_filter=dict(groups=groups),
+                                                    prefix_length=29)]), 256)
+        result = simulate_carve_request(plan, doc, 256)
+        assert result['resolutions'][0]['resolved_parents'] == expected
+        assert result['resolutions'][0]['matched_parents'] == len(expected)
+        assert result['resolutions'][0]['parent_filter'] == dict(groups=groups)
+        if not expected:
+            assert result['results'][0]['reason_code'] == 'empty_filter_match'
+        assert plan.to_dict() == before
+
+
+def test_filters_exclude_every_ineligible_record():
+    from app.carve_request import normalize
+    from app.planning import simulate_carve_request
+    def record(cidr):
+        return Allocation(cidr, '', tags=['all'])
+    plan = Plan('excluded', supernets=[record('192.0.2.0/24')], allocations=[
+        record('192.0.2.0/28'), record('192.0.2.64/27'), record('192.0.2.64/27'),
+        record('192.0.2.128/27'), record('192.0.2.128/28'),
+        record('198.51.100.0/24'), record('198.51.100.0/28')],
+        reservations=[record('192.0.2.128/26')])
+    doc = normalize(dict(version=1, items=[dict(id='app', parent_filter={'groups': [['all']]}, prefix_length=29)]), 256)
+    assert simulate_carve_request(plan, doc, 256)['resolutions'][0]['resolved_parents'] == ['192.0.2.0/24']
+
+
+def test_resolved_expansion_cap_and_empty_filter_sibling():
+    from app.carve_request import normalize
+    from app.planning import RequestExpansionError, simulate_carve_request
+    plan = Plan('cap', supernets=[Allocation(f'10.0.{i}.0/24', '', tags=['prod']) for i in range(5)])
+    before = plan.to_dict()
+    items = [dict(id='app', parent_filter={'groups': [['prod']]}, prefix_length=30, repeat=2),
+             dict(id='db', parents=['10.0.0.0/24'], prefix_length=30),
+             dict(id='empty', parent_filter={'groups': [['none']]}, prefix_length=30)]
+    doc = normalize(dict(version=1, items=items), 10)
+    with pytest.raises(RequestExpansionError, match='app: filter matched 5 parents.*empty: filter matched 0 parents; expansion 11 exceeds cap 10'):
+        simulate_carve_request(plan, doc, 10)
+    result = simulate_carve_request(plan, doc, 12)
+    assert result['summary']['proposed_allocations'] == 11
+    assert result['results'][-1]['reason_code'] == 'empty_filter_match'
+    assert result['summary']['failed_attempts'] == 1
+    assert plan.to_dict() == before

@@ -440,6 +440,9 @@ def _request_response(fn):
     def wrapped(*args, **kwargs):
         try:
             result = fn(*args, **kwargs)
+        except planning.RequestExpansionError as exc:
+            result = (jsonify(ok=False, valid=False, code='expansion_limit', error=str(exc),
+                              errors=[dict(path='/items', code='expansion_limit', message=str(exc))]), 422)
         except carve_request.RequestError as exc:
             result = (jsonify(ok=False, valid=False, code=exc.code, error=str(exc), errors=exc.errors), exc.status)
         except Exception:

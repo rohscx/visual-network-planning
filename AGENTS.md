@@ -188,6 +188,15 @@ Passing more than one or none raises `ValueError`. Tests enforce this.
 REQUEST prompt inventory and simulation share the pure parent eligibility and
 free-space functions in `planning.py`. Check reservation ancestors explicitly;
 `validate_new_allocation` permits strict containment and cannot enforce this.
+Filters use effective tags (own then inherited, de-duplicated), derived from
+`build_tree` ancestry, and resolve only against `request_parent_inventory` in
+inventory order. Each item requires exactly one of explicit parents or a filter.
+Validate filter shape in the parser; enforce combined resolved expansion before
+simulation in both preview and commit, with counts in `expansion_limit` errors.
+Report `empty_filter_match` per item without suppressing siblings. REQUEST must
+show each selector, matched count and resolved list. Prompts expose capped tag
+vocabulary, at most three samples, aggregates and grouped warning counts; keep
+all plan-derived content inside the untrusted-data fence.
 Simulation must leave the input Plan unchanged. Keep the parser, generated
 prompt, `docs/carve-request-schema.md`, and tests in sync when changing the
 contract. No separate request skill or standalone validator is maintained.
