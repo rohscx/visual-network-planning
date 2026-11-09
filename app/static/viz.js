@@ -1420,12 +1420,25 @@ function updateParentCount() {
     : '';
 }
 
+// Mirrors planning.carve(host_count=...): the smallest prefix whose block is
+// big enough for the hosts plus network and broadcast. The old form,
+// ceil(32 - log2(need)), rounded the wrong way whenever `need` was not an
+// exact power of two — a request for 500 hosts previewed a /24 holding 254,
+// and /commit_carve trusts the CIDR the client computed, so that is what got
+// written. Powers of two came out right, which is why it went unnoticed.
+function prefixForHosts(hosts) {
+  const want = Math.max(1, Math.floor(hosts)) + 2;
+  let p = 32;
+  while (p >= 0 && Math.pow(2, 32 - p) < want) p--;
+  return p;
+}
+
 function proposeForParent(parentCidr, mode, value, repeat = 1) {
   const parentNode = TREE.items.find(i => i.cidr === parentCidr);
   if (!parentNode) return [{ parent: parentCidr, cidr: null, reason: 'unknown' }];
 
   const targetPrefix = mode === 'prefix' ? value
-                     : mode === 'hosts'  ? Math.max(1, Math.ceil(32 - Math.log2(Math.max(2, value + 2))))
+                     : mode === 'hosts'  ? prefixForHosts(value)
                      :                     parentNode.prefix + Math.ceil(Math.log2(value));
   if (targetPrefix < parentNode.prefix || targetPrefix > 32) {
     return [{ parent: parentCidr, cidr: null, reason: `/${targetPrefix} doesn't fit in /${parentNode.prefix}` }];
