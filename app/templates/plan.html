@@ -93,6 +93,7 @@
         <button data-density="detail"  aria-pressed="true">detail</button>
         <button data-density="compact" aria-pressed="false">compact</button>
       </div>
+      <button class="btn ghost" id="calcOpen" aria-controls="calcPanel" aria-expanded="false" title="Calculator (k)">calculator</button>
       <div class="spacer"></div>
       <div class="legend" id="legend"></div>
       <span class="tag-filter" id="tagFilter">
@@ -107,7 +108,7 @@
       <span><span class="ok">●</span> ready</span>
       <span id="statSel">no selection</span>
       <span></span>
-      <span><kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>d</kbd> density</span>
+      <span><kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>d</kbd> density · <kbd>k</kbd> calculator</span>
     </div>
   </section>
 
@@ -305,6 +306,25 @@
           <button class="btn ghost" id="detailCancel">cancel</button>
           <button class="btn primary" id="detailSave">save</button>
         </div>
+      </div>
+    </div>
+    <div class="calc-panel" id="calcPanel" aria-hidden="true" inert>
+      <div class="detail-head">
+        <h3>IPv4 calculator · read-only</h3>
+        <button class="x" id="calcClose" title="Close (Esc)" aria-label="Close calculator">×</button>
+      </div>
+      <div class="detail-body">
+        <form id="calcForm">
+          <div class="field">
+            <label class="lbl" for="calcInput">IPv4 address, CIDR, or address and netmask</label>
+            <input id="calcInput" type="text" maxlength="128" placeholder="192.0.2.0/24" autocomplete="off" spellcheck="false" aria-describedby="calcStatus">
+          </div>
+          <button class="btn primary" id="calcSubmit" type="submit" disabled>calculate</button>
+        </form>
+        <p id="calcStatus" role="status" aria-live="polite">Enter or paste an IPv4 range. Context has not loaded.</p>
+        <button class="btn ghost" id="calcSuggestion" type="button" hidden></button>
+        <button class="btn ghost" id="calcRetry" type="button" hidden>retry calculation</button>
+        <div id="calcResult"></div>
       </div>
     </div>
   </aside>

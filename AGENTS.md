@@ -84,7 +84,31 @@ A plan tracks three flat lists of `Allocation` records:
 When adding logic that iterates "everything in the plan," use
 `planning._all_owned_pairs(plan)` to get all three kinds at once — don't
 write a new `supernets + allocations` chain that silently skips
-reservations.
+reservations. When metadata or kind is needed, use `_all_owned_records(plan)`,
+which yields `(kind, record, parsed)` in bucket order. `_all_owned_pairs` delegates
+to it; keep the three-bucket enumeration in that one helper.
+
+## Read-only IPv4 calculator
+
+`POST /plans/<name>/calculate` is read-only and returns `Cache-Control: no-store`.
+Pure calculator helpers and `CalcInputError` live in `planning.py`, independent
+of the carve-request parser. Validate the strict calculator grammar and call
+`parse_strict()` at the boundary; host-bit errors offer an explicit suggestion,
+never silent correction. A bare address always means /32; dotted masks must be
+contiguous netmasks, not wildcard masks. Keep the API, tests, and
+`docs/network-calculator.md` synchronized.
+
+Use arithmetic for counts. /31 has two RFC 3021 endpoints and no broadcast;
+/32 has one host, no broadcast, and cannot split. This deliberately differs from
+`carve(host_count=...)` sizing, which adds two reserved addresses: do not change
+carve sizing to match calculator semantics.
+
+Context includes every bucket and all strict descendants, equals, and ancestors;
+retain duplicates and reject malformed plan data rather than return partial
+results. An empty descendant list does not imply carve eligibility. The `k`
+slide-over and details are mutually exclusive; retain carve/REQUEST DOM and
+state. Calculator actions only copy, calculate child ranges, or navigate to
+records. Guard asynchronous responses by generation and recalculate on refresh.
 
 ## Utilization: two different numbers, on purpose
 

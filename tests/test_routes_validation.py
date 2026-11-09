@@ -8,12 +8,13 @@ Flask test client — keep these patterns reusable for future route tests.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import io
 import json
 
 import pytest
 
-from app import create_app, routes
+from app import create_app, planning, routes
 from app.models import Allocation, Plan
 from app import storage
 
@@ -243,3 +244,130 @@ def test_empty_inventory_and_no_fit_are_successful_responses(client, request_pla
     assert preview.json['summary']['failed_attempts'] == 3
     assert all(r['status'] == 'parent_not_found' for r in preview.json['results'])
     assert request_plan['saves'] == 0
+
+
+# --- read-only calculator ---------------------------------------------------
+
+@pytest.fixture
+def calculator_plan(monkeypatch):
+    plan = Plan('calc', supernets=[Allocation('192.0.2.0/24', 'root')])
+    monkeypatch.setattr(storage, 'load_plan', lambda *args: plan)
+    def forbidden(*args, **kwargs):
+        pytest.fail('Calculator must never save a plan')
+    monkeypatch.setattr(storage, 'save_plan', forbidden)
+    return plan
+
+
+def test_calculator_route_success_and_failure_are_read_only(client, calculator_plan):
+    before = deepcopy(calculator_plan)
+    for value, status in [('192.0.2.0/24', 200), ('192.0.2.37/24', 422),
+                          ('192.0.2.0 255.255.255.0', 200), ('192.0.2.37', 200)]:
+        r = client.post('/plans/calc/calculate', json={'input': value})
+        assert r.status_code == status
+        assert r.headers['Cache-Control'] == 'no-store'
+        assert calculator_plan == before
+        body = r.get_json()
+        if status == 422:
+            assert body['code'] == 'host_bits_set'
+            assert body['suggested_cidr'] == '192.0.2.0/24'
+            assert body['field'] == 'input'
+        else:
+            assert body['ok'] is True
+            assert body['containing_supernet']['cidr'] == '192.0.2.0/24'
+
+
+@pytest.mark.parametrize('payload', [None, [], 'text', 3, {}, {'input': None}, {'input': []},
+    {'input': {}}, {'input': True}, {'input': 24}, {'input': ''}, {'input': 'x' * 129},
+    {'input': '192.0.2.0/24', 'extra': 1}])
+def test_calculator_route_invalid_body(client, calculator_plan, payload):
+    r = _post_json(client, '/plans/calc/calculate', payload)
+    assert r.status_code == 422
+    assert r.get_json()['code'] == 'invalid_input'
+    assert r.get_json()['field'] == 'input'
+    assert r.get_json()['suggested_cidr'] is None
+    assert r.headers['Cache-Control'] == 'no-store'
+
+
+@pytest.mark.parametrize('data,content_type,status,code', [
+    ('{', 'application/json', 400, 'invalid_json'),
+    ('\xff', 'application/json', 400, 'invalid_json'),
+    ('{}', 'text/plain', 415, 'unsupported_media_type'),
+    (' ' * 4097, 'application/json', 413, 'request_too_large'),
+])
+def test_calculator_transport(client, calculator_plan, data, content_type, status, code):
+    r = client.post('/plans/calc/calculate', data=data, content_type=content_type)
+    assert r.status_code == status
+    assert r.get_json()['code'] == code
+    assert r.headers['Cache-Control'] == 'no-store'
+
+
+def test_calculator_request_limits_and_query(client, calculator_plan):
+    body = json.dumps({'input': '192.0.2.0/24'})
+    r = client.post('/plans/calc/calculate', data=body.ljust(4096), content_type='application/json')
+    assert r.status_code == 200
+    r = client.post('/plans/calc/calculate?input=192.0.2.0/24', json={'input': '192.0.2.0/24'})
+    assert r.status_code == 422
+    assert r.get_json()['code'] == 'invalid_input'
+
+
+@pytest.mark.parametrize('failure,status,code', [
+    (FileNotFoundError(), 404, 'plan_not_found'),
+    (ValueError('bad JSON'), 500, 'invalid_plan_data'),
+    (KeyError('cidr'), 500, 'invalid_plan_data'),
+])
+def test_calculator_load_errors(client, calculator_plan, monkeypatch, failure, status, code):
+    def fail(*args):
+        raise failure
+    monkeypatch.setattr(storage, 'load_plan', fail)
+    r = client.post('/plans/calc/calculate', json={'input': '192.0.2.0/24'})
+    assert r.status_code == status
+    assert r.get_json()['code'] == code
+    assert r.headers['Cache-Control'] == 'no-store'
+
+
+def test_calculator_invalid_plan_cidr_and_name(client, calculator_plan):
+    calculator_plan.reservations.append(Allocation('malformed', 'bad'))
+    before = deepcopy(calculator_plan)
+    r = client.post('/plans/calc/calculate', json={'input': '192.0.2.0/24'})
+    assert r.status_code == 500
+    assert r.get_json()['code'] == 'invalid_plan_data'
+    assert calculator_plan == before
+    r = client.post('/plans/bad%20name/calculate', json={'input': '192.0.2.0/24'})
+    assert r.status_code == 400
+    assert r.get_json()['code'] == 'invalid_plan_name'
+    assert r.headers['Cache-Control'] == 'no-store'
+
+
+
+def test_calculator_empty_plan_and_strict_boundary(client, calculator_plan, monkeypatch):
+    calculator_plan.supernets.clear()
+    original = routes.planning.parse_strict
+    calls = []
+    def strict(cidr):
+        calls.append(cidr)
+        return original(cidr)
+    monkeypatch.setattr(routes.planning, 'parse_strict', strict)
+    r = client.post('/plans/calc/calculate', json={'input': '192.0.2.0/31'})
+    assert r.status_code == 200
+    assert calls and all(cidr == '192.0.2.0/31' for cidr in calls)
+    body = r.get_json()
+    assert body['containing_supernet'] is None
+    assert body['containing_supernets'] == []
+    assert body['records_inside'] == []
+    assert body['broadcast_address'] is None
+    assert body['range_end'] == '192.0.2.1'
+    assert body['next_prefix_subnets'] == ['192.0.2.0/32', '192.0.2.1/32']
+
+
+def test_calculator_input_error_from_calculation_is_422(client, calculator_plan, monkeypatch):
+    """CalcInputError subclasses ValueError; it must not fall into the 500 net."""
+    def raise_input_error(*args, **kwargs):
+        raise planning.CalcInputError('host_bits_set', 'Host bits are set', '192.0.2.0/24')
+    monkeypatch.setattr(planning, 'calculate_network', raise_input_error)
+    r = client.post('/plans/calc/calculate', json={'input': '192.0.2.0/24'})
+    assert r.status_code == 422
+    body = r.get_json()
+    assert body['code'] == 'host_bits_set'
+    assert body['field'] == 'input'
+    assert body['suggested_cidr'] == '192.0.2.0/24'
+    assert r.headers['Cache-Control'] == 'no-store'

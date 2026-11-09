@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import ipaddress
+
 import pytest
 
 from app.models import Allocation, Plan  # noqa: F401
 from app.planning import (
     build_tree, carve, find_conflicts, find_orphans, free_space,
-    parse_strict, validate_new_allocation,
+    parse_strict, validate_new_allocation, CalcInputError, calculate_network,
+    _all_owned_pairs, _all_owned_records,
 )
 
 
@@ -517,3 +521,164 @@ def test_request_reservation_priority_and_selected_parents_interact():
     assert json.dumps(plan.to_dict()) == before
     plan.reservations.append(Allocation('192.0.2.0/24', ''))
     assert simulate_carve_request(plan, doc, 256)['results'][0]['status'] == 'parent_is_reservation'
+
+
+# --- read-only calculator ---------------------------------------------------
+
+
+@pytest.mark.parametrize('value,kind', [
+    (' 192.0.2.0/24 ', 'cidr'),
+    ('192.0.2.0\t255.255.255.0', 'netmask'),
+])
+def test_calculator_forms(value, kind):
+    result = calculate_network(value)
+    assert result['input'] == value.strip()
+    assert result['input_kind'] == kind
+    assert result['cidr'] == '192.0.2.0/24'
+    assert result['next_prefix_subnets'] == ['192.0.2.0/25', '192.0.2.128/25']
+    expected = calculate_network('192.0.2.0/24')
+    assert {k: v for k, v in result.items() if k not in {'input', 'input_kind'}} == {
+        k: v for k, v in expected.items() if k not in {'input', 'input_kind'}}
+
+
+@pytest.mark.parametrize('cidr,network,end,first,last,count,total,mask,wildcard,semantics,broadcast_kind', [
+    ('0.0.0.0/0', '0.0.0.0', '255.255.255.255', '0.0.0.1', '255.255.255.254',
+     4294967294, 4294967296, '0.0.0.0', '255.255.255.255', 'conventional', 'directed'),
+    ('192.0.2.0/24', '192.0.2.0', '192.0.2.255', '192.0.2.1', '192.0.2.254',
+     254, 256, '255.255.255.0', '0.0.0.255', 'conventional', 'directed'),
+    ('192.0.2.0/30', '192.0.2.0', '192.0.2.3', '192.0.2.1', '192.0.2.2',
+     2, 4, '255.255.255.252', '0.0.0.3', 'conventional', 'directed'),
+    ('192.0.2.0/31', '192.0.2.0', '192.0.2.1', '192.0.2.0', '192.0.2.1',
+     2, 2, '255.255.255.254', '0.0.0.1', 'point_to_point', 'none_point_to_point'),
+    ('192.0.2.0/32', '192.0.2.0', '192.0.2.0', '192.0.2.0', '192.0.2.0',
+     1, 1, '255.255.255.255', '0.0.0.0', 'single_host', 'none_single_host'),
+    ('255.255.255.255/32', '255.255.255.255', '255.255.255.255', '255.255.255.255', '255.255.255.255',
+     1, 1, '255.255.255.255', '0.0.0.0', 'single_host', 'none_single_host'),
+    ('0.0.0.0/32', '0.0.0.0', '0.0.0.0', '0.0.0.0', '0.0.0.0',
+     1, 1, '255.255.255.255', '0.0.0.0', 'single_host', 'none_single_host'),
+])
+def test_calculator_exact_math(monkeypatch, cidr, network, end, first, last, count,
+                               total, mask, wildcard, semantics, broadcast_kind):
+    def forbidden(*args, **kwargs):
+        pytest.fail('Calculator must never enumerate hosts')
+    monkeypatch.setattr(ipaddress.IPv4Network, 'hosts', forbidden)
+    result = calculate_network(cidr)
+    assert {key: result[key] for key in (
+        'network_address', 'range_end', 'first_usable_host', 'last_usable_host',
+        'usable_host_count', 'total_addresses', 'netmask', 'wildcard',
+        'host_semantics', 'broadcast_kind', 'broadcast_address', 'prefix_length',
+    )} == dict(network_address=network, range_end=end, first_usable_host=first,
+               last_usable_host=last, usable_host_count=count, total_addresses=total,
+               netmask=mask, wildcard=wildcard, host_semantics=semantics,
+               broadcast_kind=broadcast_kind,
+               broadcast_address=end if semantics == 'conventional' else None,
+               prefix_length=int(cidr.split('/')[1]))
+    children = result['next_prefix_subnets']
+    assert len(children) == (0 if total == 1 else 2)
+    if total > 1:
+        parsed = [ipaddress.IPv4Network(child) for child in children]
+        assert str(parsed[0].network_address) == network
+        assert str(parsed[1].broadcast_address) == end
+        assert parsed[0].num_addresses == parsed[1].num_addresses == total // 2
+
+
+def test_calculator_bare_address_context_does_not_change_math():
+    plans = [None, Plan('empty'), _plan(supernets=[('192.0.2.0/24', 'root')])]
+    results = [calculate_network('192.0.2.37', plan) for plan in plans]
+    context = {'containing_supernet', 'containing_supernets', 'containing_records',
+               'equal_records', 'records_inside', 'context_message'}
+    math = [{k: v for k, v in result.items() if k not in context} for result in results]
+    assert math[0] == math[1] == math[2]
+    assert math[0]['cidr'] == '192.0.2.37/32'
+    assert math[0]['input_kind'] == 'address'
+    assert math[0]['usable_host_count'] == 1
+    assert math[0]['next_prefix_subnets'] == []
+
+
+@pytest.mark.parametrize('value,code,suggestion', [
+    ('192.0.2.37/24', 'host_bits_set', '192.0.2.0/24'),
+    ('192.0.2.37 255.255.255.0', 'host_bits_set', '192.0.2.0/24'),
+    ('192.0.2.0 0.0.0.255', 'invalid_netmask', None),
+    ('192.0.2.0 255.0.255.0', 'invalid_netmask', None),
+    ('192.0.2.0 255.255.255.256', 'invalid_netmask', None),
+    ('192.0.2.0 255.255.255.00', 'invalid_netmask', None),
+    ('::1', 'invalid_input', None), ('192.0.2.256', 'invalid_input', None),
+    ('192.0.02.0/24', 'invalid_input', None), ('192.0.2/24', 'invalid_input', None),
+    ('192.0.2.0/33', 'invalid_input', None), ('192.0.2.0/-1', 'invalid_input', None),
+    ('192.0.2.0/+24', 'invalid_input', None), ('192.0.2.0/2.4', 'invalid_input', None),
+    ('192.0.2.0/24/24', 'invalid_input', None), ('192.0.2.0/255.255.255.0', 'invalid_input', None),
+    ('192.0.2.0 255.255.255.0 extra', 'invalid_input', None),
+    ('', 'invalid_input', None), ('   ', 'invalid_input', None),
+    (None, 'invalid_input', None), (24, 'invalid_input', None),
+    (True, 'invalid_input', None), ([], 'invalid_input', None), ({}, 'invalid_input', None),
+    (' ' * 120 + '192.0.2.0', 'invalid_input', None),
+])
+def test_calculator_rejects_input(value, code, suggestion):
+    plan = _plan(supernets=[('192.0.2.0/24', 'root')])
+    before = deepcopy(plan)
+    with pytest.raises(CalcInputError) as caught:
+        calculate_network(value, plan)
+    assert caught.value.code == code
+    assert caught.value.suggested_cidr == suggestion
+    assert caught.value.message == str(caught.value)
+    assert plan == before
+
+
+@pytest.mark.parametrize('value,cidr', [
+    ('0.0.0.0 0.0.0.0', '0.0.0.0/0'),
+    ('192.0.2.37 255.255.255.255', '192.0.2.37/32'),
+    (' ' * 119 + '192.0.2.0', '192.0.2.0/32'),
+])
+def test_calculator_mask_and_length_boundaries(value, cidr):
+    assert calculate_network(value)['cidr'] == cidr
+
+
+def test_calculator_complete_context_and_order():
+    plan = _plan(
+        supernets=[('192.0.2.0/24', 'outer'), ('192.0.2.0/25', 'inner'),
+                   ('192.0.2.3/25', 'normalized duplicate'), ('198.51.100.0/24', 'other')],
+        allocations=[('192.0.2.64/26', 'container'), ('192.0.2.64/27', 'leaf'),
+                     ('203.0.113.0/24', 'orphan'), ('192.0.2.64/27', 'duplicate leaf')],
+        reservations=[('192.0.2.96/27', 'reserved'), ('192.0.2.64/27', 'duplicate reservation')],
+    )
+    plan.reservations[0].description = 'Held for later'
+    plan.reservations[0].tags = ['hold']
+    before = deepcopy(plan)
+    result = calculate_network('192.0.2.0/25', plan)
+    assert [r['name'] for r in result['containing_supernets']] == ['inner', 'normalized duplicate', 'outer']
+    assert result['containing_supernet']['name'] == 'inner'
+    assert [r['name'] for r in result['equal_records']] == ['inner', 'normalized duplicate']
+    assert [r['name'] for r in result['containing_records']] == ['outer']
+    assert [r['name'] for r in result['records_inside']] == [
+        'container', 'leaf', 'duplicate leaf', 'duplicate reservation', 'reserved']
+    assert result['records_inside'][-1] == dict(kind='reservation', cidr='192.0.2.96/27',
+        name='reserved', description='Held for later', tags=['hold'])
+    whole = calculate_network('0.0.0.0/0', plan)
+    assert whole['containing_supernet'] is None
+    assert len(whole['records_inside']) == 10
+    assert {r['kind'] for r in whole['records_inside']} == {'supernet', 'allocation', 'reservation'}
+    assert 'No supernet' in whole['context_message']
+    assert calculate_network('203.0.113.0/24', plan)['equal_records'][0]['name'] == 'orphan'
+    assert list(_all_owned_pairs(plan)) == [(r.cidr, n) for _, r, n in _all_owned_records(plan)]
+    assert plan == before
+    result['records_inside'][-1]['tags'].append('do not alias')
+    assert plan == before
+
+
+@pytest.mark.parametrize('kind', ['allocations', 'reservations'])
+def test_calculator_leaf_or_reservation_ancestor(kind):
+    plan = Plan('test', supernets=[Allocation('192.0.2.0/24', 'root')])
+    getattr(plan, kind).append(Allocation('192.0.2.0/25', 'occupied'))
+    result = calculate_network('192.0.2.1', plan)
+    assert result['records_inside'] == []
+    assert [r['name'] for r in result['containing_records']] == ['root', 'occupied']
+
+
+def test_calculator_no_truncation_and_invalid_plan():
+    plan = Plan('test', allocations=[Allocation('192.0.2.0/24', str(i)) for i in range(300)])
+    assert len(calculate_network('192.0.2.0/24', plan)['equal_records']) == 300
+    plan.reservations.append(Allocation('bad CIDR', 'bad'))
+    before = deepcopy(plan)
+    with pytest.raises(ValueError):
+        calculate_network('192.0.2.0/24', plan)
+    assert plan == before

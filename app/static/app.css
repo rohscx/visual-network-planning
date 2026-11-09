@@ -1192,7 +1192,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .node .row .actions-tn button:hover { background: var(--bg-3); color: var(--err); }
 
 /* ---- Detail / edit slide-over ---- */
-.detail {
+.detail, .calc-panel {
   position: absolute;
   inset: 0;
   background: var(--bg-1);
@@ -1202,7 +1202,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   z-index: 4;
   display: flex; flex-direction: column;
 }
-.detail.on { transform: translateX(0); }
+.detail.on, .calc-panel.on { transform: translateX(0); }
 .detail-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 14px;
@@ -1358,3 +1358,13 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .request-attempt label { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0; }
 .request-attempt input { flex: none; width: auto; }
 .rail button:focus-visible, .rail input:focus-visible, .rail textarea:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+
+
+.calc-panel p { color: var(--fg-2); font-size: 12px; line-height: 1.5; }
+.calc-panel [hidden] { display: none; }
+.calc-panel .detail-cidr { background: none; border: 0; padding: 0; }
+.calc-result-grid .v { font-size: 12px; overflow-wrap: anywhere; }
+.calc-result-grid button { color: inherit; font: inherit; background: none; border: 0; padding: 0; text-align: left; }
+.calc-record-list { list-style: none; padding: 0; margin: 8px 0 16px; }
+.calc-record-list li { margin: 6px 0; }
+.calc-record-list button { width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }

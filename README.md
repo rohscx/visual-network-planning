@@ -61,7 +61,7 @@ terminal/engineering and a light variant felt out of place.
 JetBrains Mono for CIDRs, Geist Sans for prose.
 
 Keyboard: <kbd>/</kbd> search · <kbd>c</kbd> carve · <kbd>d</kbd> toggle
-detail/compact density · <kbd>Esc</kbd> closes overlays.
+detail/compact density · <kbd>k</kbd> calculator · <kbd>Esc</kbd> closes overlays.
 
 The viz has two densities. **Detail** draws every supernet as a full
 nested-rectangle strip. **Compact** draws each as a 40px row with a
@@ -104,6 +104,14 @@ there exactly as in detail). The choice is remembered per browser, and
   used·free / by tag / by utilization gradient. Hover any block for a
   detail tooltip; click a free slot to pre-fill the carve form;
   zoom into the selection.
+- **IPv4 calculator** — read-only rail slide-over for CIDR, bare address (/32),
+  or address plus contiguous netmask. Strict input rejects host bits and offers
+  an explicit alignment suggestion. Shows boundaries, masks, RFC-aware /31 and
+  /32 host counts, child splits, and all containing/equal/descendant plan records.
+  Copy fields or jump to record details without changing carve drafts or REQUEST
+  proposals. Calculator host semantics deliberately differ from carve host-count
+  sizing, which still adds two reserved addresses. See
+  [network calculator](docs/network-calculator.md) for the API and examples.
 - **Detail panel** — click any node for a slide-over with editable name /
   description / tags, plus delete.
 - **Search** — <kbd>/</kbd> to fuzzy-filter the tree by CIDR, name, or

@@ -256,9 +256,11 @@ async function fetchPlan() {
 }
 
 async function refresh() {
+  if (calcHasQuery) resetCalculator('Refreshing plan context… Record lists are loading.');
   manualPreviewGeneration++;
   invalidateRequest('Plan refreshed; preview again.');
   await fetchPlan();
+  if (calcHasQuery) calculateInput();
   // If the detail panel is open on a record that just disappeared (the
   // user deleted it from another tab, or reclassified to a different
   // bucket / state that drops it from TREE.items), close the slide-over
@@ -1908,12 +1910,144 @@ async function requestDelete(cidr) {
 }
 
 //==========================================================
+//  Read-only calculator
+//==========================================================
+const calcPanel = document.getElementById('calcPanel');
+const calcInput = document.getElementById('calcInput');
+const calcStatus = document.getElementById('calcStatus');
+const calcResult = document.getElementById('calcResult');
+const calcSubmit = document.getElementById('calcSubmit');
+const calcSuggestion = document.getElementById('calcSuggestion');
+const calcRetry = document.getElementById('calcRetry');
+let calcGeneration = 0;
+let calcReturnFocus = null;
+let calcHasQuery = false;
+
+function openCalculator() {
+  if (calcPanel.classList.contains('on')) { closeCalculator(); return; }
+  calcReturnFocus = document.activeElement;
+  closeDetail();
+  calcPanel.inert = false;
+  calcPanel.classList.add('on');
+  calcPanel.setAttribute('aria-hidden', 'false');
+  document.getElementById('calcOpen').setAttribute('aria-expanded', 'true');
+  calcInput.focus();
+}
+function closeCalculator() {
+  if (!calcPanel.classList.contains('on')) return;
+  calcPanel.classList.remove('on');
+  calcPanel.setAttribute('aria-hidden', 'true');
+  calcPanel.inert = true;
+  document.getElementById('calcOpen').setAttribute('aria-expanded', 'false');
+  const previous = calcReturnFocus;
+  (previous?.isConnected && !previous.closest('[aria-hidden="true"]')
+    ? previous : document.getElementById('calcOpen')).focus();
+}
+function resetCalculator(message) {
+  calcGeneration++;
+  calcResult.replaceChildren();
+  calcSuggestion.hidden = true;
+  calcRetry.hidden = true;
+  calcInput.removeAttribute('aria-invalid');
+  calcStatus.textContent = message;
+  calcPanel.setAttribute('aria-busy', 'false');
+  calcSubmit.disabled = !calcInput.value.trim();
+}
+function renderCalculation(data) {
+  const esc = escapeHtml;
+  const copy = (value, cls = 'cidr copyable') =>
+    `<button type="button" class="${cls}" data-copy="${esc(value)}" title="Click to copy">${esc(value)}</button>`;
+  const semantics = data.host_semantics === 'point_to_point'
+    ? 'RFC 3021 point-to-point: both addresses are endpoints; no directed broadcast.'
+    : data.host_semantics === 'single_host' ? 'Single host; no subnet broadcast.'
+    : 'Conventional subnet: network and directed broadcast are excluded from usable hosts.';
+  const fields = [
+    ['network address', data.network_address, true], ['range end', data.range_end, true],
+    ['broadcast address', data.broadcast_address, true], ['broadcast kind', data.broadcast_kind],
+    ['first usable host', data.first_usable_host, true], ['last usable host', data.last_usable_host, true],
+    ['usable hosts', data.usable_host_count], ['total addresses', data.total_addresses],
+    ['prefix length', data.prefix_length], ['netmask', data.netmask, true], ['wildcard', data.wildcard, true],
+  ];
+  const recordList = (key, label) => `<h4>${label}</h4>` + (data[key].length
+    ? `<ul class="calc-record-list">${data[key].map(record => `<li><button type="button" class="btn ghost" data-jump="${esc(record.cidr)}">${esc(record.kind)} · ${esc(record.cidr)} · ${esc(record.name || '(unnamed)')}<br>${esc(record.description || '')} ${esc(record.tags.join(', '))}</button></li>`).join('')}</ul>`
+    : '<p>None in this plan.</p>');
+  const duplicates = [...data.records_inside, ...data.equal_records, ...data.containing_records];
+  const ambiguous = new Set(duplicates.map(record => record.cidr)).size < duplicates.length;
+  calcResult.innerHTML = `${copy(data.cidr, 'detail-cidr')}
+    <p>Input: ${esc(data.input)} (${esc(data.input_kind)}).</p>
+    ${data.input_kind === 'address' ? '<p>Bare address interpreted as a single host.</p>' : ''}
+    <p>${semantics}</p>
+    <div class="detail-stats calc-result-grid">${fields.map(([label, value, canCopy]) =>
+      `<div class="detail-stat"><div class="k">${label}</div><div class="v">${value === null ? 'None — ' + (data.prefix_length === 31 ? 'point-to-point' : 'single host') : canCopy ? copy(value) : esc(String(value))}</div></div>`).join('')}</div>
+    <h4>Next-prefix split</h4>
+    ${data.next_prefix_subnets.length ? `<ul class="calc-record-list">${data.next_prefix_subnets.map(cidr => `<li><button type="button" class="btn ghost" data-calculate="${esc(cidr)}">${esc(cidr)}</button></li>`).join('')}</ul>` : '<p>/32 — cannot split further.</p>'}
+    <p>${esc(data.context_message)}</p>
+    ${ambiguous ? '<p>Duplicate CIDRs exist. Every record is listed; CIDR navigation cannot distinguish duplicate records.</p>' : ''}
+    ${recordList('containing_supernets', 'Containing supernets (most specific first)')}
+    ${recordList('equal_records', 'Equal records')}
+    ${recordList('containing_records', 'Strict ancestor records')}
+    ${recordList('records_inside', 'All strict descendant records')}
+    <p>These lists describe containment, not carve eligibility. Counts describe subnet arithmetic, not global assignability.</p>`;
+}
+async function calculateInput() {
+  calcHasQuery = true;
+  resetCalculator('Calculating… Record lists are loading.');
+  const generation = calcGeneration;
+  calcSubmit.disabled = true;
+  calcPanel.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch(URL_PLAN.replace('/plan.json', '/calculate'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, cache: 'no-store',
+      body: JSON.stringify({input: calcInput.value}),
+    });
+    const data = await response.json();
+    if (generation !== calcGeneration) return;
+    if (!response.ok || !data.ok) {
+      calcStatus.textContent = `${data.error || 'Calculation failed.'} Record lists are unavailable.`;
+      calcInput.setAttribute('aria-invalid', response.status === 422 ? 'true' : 'false');
+      if (data.suggested_cidr) {
+        calcSuggestion.textContent = `Use ${data.suggested_cidr}`;
+        calcSuggestion.dataset.cidr = data.suggested_cidr;
+        calcSuggestion.hidden = false;
+      }
+      calcRetry.hidden = response.status < 500;
+      return;
+    }
+    calcStatus.textContent = 'Calculation complete. Plan context loaded.';
+    renderCalculation(data);
+  } catch (error) {
+    if (generation !== calcGeneration) return;
+    calcStatus.textContent = 'Could not reach the calculator. Record lists failed to load; retry when connected.';
+    calcRetry.hidden = false;
+  } finally {
+    if (generation === calcGeneration) {
+      calcPanel.setAttribute('aria-busy', 'false');
+      calcSubmit.disabled = !calcInput.value.trim();
+    }
+  }
+}
+document.getElementById('calcOpen').addEventListener('click', openCalculator);
+document.getElementById('calcClose').addEventListener('click', closeCalculator);
+document.getElementById('calcForm').addEventListener('submit', e => { e.preventDefault(); calculateInput(); });
+calcInput.addEventListener('input', () => {
+  calcHasQuery = false;
+  resetCalculator(calcInput.value.trim() ? 'Ready to calculate. Context has not loaded for this input.' : 'Enter or paste an IPv4 range. Context has not loaded.');
+});
+calcRetry.addEventListener('click', calculateInput);
+calcSuggestion.addEventListener('click', () => { calcInput.value = calcSuggestion.dataset.cidr; calculateInput(); });
+calcResult.addEventListener('click', e => {
+  const child = e.target.closest('[data-calculate]');
+  if (child) { calcInput.value = child.dataset.calculate; calculateInput(); }
+});
+
+//==========================================================
 //  Detail panel
 //==========================================================
 const detail = document.getElementById('detail');
 function openDetail(cidr) {
   const node = nodeOf(cidr);
   if (!node) return;
+  closeCalculator();
   // If the panel is already open on a *different* cidr, drop the `on`
   // class briefly so the slide-in transition replays for the new
   // content. The final add('on') below is deferred via rAF in that
@@ -1950,7 +2084,9 @@ function openDetail(cidr) {
   // so the browser actually animates the off→on change. Otherwise both
   // states land in the same paint and the slide-in is skipped.
   if (needsReplay) {
-    requestAnimationFrame(() => detail.classList.add('on'));
+    requestAnimationFrame(() => {
+      if (STATE.detailCidr === cidr && !calcPanel.classList.contains('on')) detail.classList.add('on');
+    });
   } else {
     detail.classList.add('on');
   }
@@ -2368,11 +2504,13 @@ function updateLegend() {
 //==========================================================
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (calcPanel.classList.contains('on')) { closeCalculator(); return; }
     if (detail.classList.contains('on')) { closeDetail(); return; }
     if (searchbar.classList.contains('on')) { closeSearch(); return; }
     if (STATE.tagFilter) { setTagFilter(null); return; }
   }
   if (e.target.matches('input, select, textarea')) return;
+  if (e.key === 'k') { e.preventDefault(); openCalculator(); }
   if (e.key === 'c') switchTab('carve');
   if (e.key === 'd') setDensity(STATE.density === 'compact' ? 'detail' : 'compact');
   if (e.key === '/') { e.preventDefault(); openSearch(); }

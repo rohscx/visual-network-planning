@@ -7,6 +7,7 @@ layer is a thin wrapper that loads a Plan, calls these, and saves it back.
 from __future__ import annotations
 
 import ipaddress
+import re
 from functools import lru_cache
 from typing import Iterable
 
@@ -94,10 +95,7 @@ def build_tree(plan: Plan) -> dict:
     free_addresses sums direct gaps and descendant free space, excluding leaf
     allocations and entire reservation subtrees; utilization is total minus free.
     """
-    supernets = [(s, parse(s.cidr), "supernet") for s in plan.supernets]
-    allocs = [(a, parse(a.cidr), "allocation") for a in plan.allocations]
-    reservs = [(r, parse(r.cidr), "reservation") for r in plan.reservations]
-    all_nodes = supernets + allocs + reservs
+    all_nodes = [(record, net, kind) for kind, record, net in _all_owned_records(plan)]
 
     # Parent assignment via a sorted containment sweep — O(N log N) rather
     # than the naive all-pairs subnet_of scan (O(N²), ~460k calls at 700
@@ -178,11 +176,18 @@ def build_tree(plan: Plan) -> dict:
     return {"roots": roots, "orphans": orphans}
 
 
+def _all_owned_records(plan: Plan):
+    """Yield (kind, record, parsed) in bucket and original record order."""
+    for kind, bucket in (("supernet", plan.supernets),
+                         ("allocation", plan.allocations),
+                         ("reservation", plan.reservations)):
+        for record in bucket:
+            yield kind, record, parse(record.cidr)
+
+
 def _all_owned_pairs(plan: Plan):
     """All (cidr, parsed) pairs the plan tracks, regardless of kind."""
-    return ([(s.cidr, parse(s.cidr)) for s in plan.supernets]
-            + [(a.cidr, parse(a.cidr)) for a in plan.allocations]
-            + [(r.cidr, parse(r.cidr)) for r in plan.reservations])
+    return [(record.cidr, net) for _, record, net in _all_owned_records(plan)]
 
 
 def find_conflicts(plan: Plan) -> list[tuple[str, str]]:
@@ -314,11 +319,7 @@ def validate_new_allocation(plan: Plan, new_cidr: str) -> tuple[bool, str]:
 
 
 def _request_records(plan: Plan) -> list[tuple[Allocation, IPv4Net, str]]:
-    records = [(record, kind) for kind, bucket in (
-        ('supernet', plan.supernets), ('allocation', plan.allocations),
-        ('reservation', plan.reservations)) for record in bucket]
-    return [(record, net, kind) for (record, kind), (_, net)
-            in zip(records, _all_owned_pairs(plan))]
+    return [(record, net, kind) for kind, record, net in _all_owned_records(plan)]
 
 
 def _request_parent(records, parent):
@@ -423,3 +424,94 @@ def simulate_carve_request(plan: Plan, document: dict, max_allocations: int) -> 
     return dict(results=results, summary=dict(attempts=len(results), successful_attempts=successes,
                 failed_attempts=len(results) - successes,
                 proposed_allocations=sum(len(r['proposals']) for r in results), all_fit=successes == len(results)))
+
+
+class CalcInputError(ValueError):
+    def __init__(self, code: str, message: str, suggested_cidr: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.suggested_cidr = suggested_cidr
+
+
+def parse_calculator_input(value: str) -> tuple[str, str, IPv4Net]:
+    """Validate the calculator grammar and strictly parse its network."""
+    if not isinstance(value, str) or len(value) > 128 or not value.strip():
+        raise CalcInputError("invalid_input", "Enter an IPv4 range (1–128 characters).")
+    text = value.strip()
+    tokens = text.split()
+    kind = "address"
+    prefix = 32
+    address = tokens[0]
+    if len(tokens) == 2:
+        kind = "netmask"
+        try:
+            mask = int(ipaddress.IPv4Address(tokens[1]))
+        except ValueError as exc:
+            raise CalcInputError("invalid_netmask", "Use a contiguous dotted-quad netmask.") from exc
+        inverse = mask ^ 0xffffffff
+        if inverse & (inverse + 1):
+            raise CalcInputError("invalid_netmask", "Use a contiguous netmask, not a wildcard mask.")
+        prefix = 32 - inverse.bit_length()
+    elif len(tokens) != 1:
+        raise CalcInputError("invalid_input", "Use an address, CIDR, or address and netmask.")
+    elif "/" in address:
+        kind = "cidr"
+        address, suffix = address.split("/", 1)
+        if not re.fullmatch(r"[0-9]{1,2}", suffix) or int(suffix) > 32:
+            raise CalcInputError("invalid_input", "Prefix must be a decimal number from 0 to 32.")
+        prefix = int(suffix)
+    try:
+        ipaddress.IPv4Address(address)
+    except ValueError as exc:
+        raise CalcInputError("invalid_input", "Use four IPv4 octets without leading zeros.") from exc
+    cidr = f"{address}/{prefix}"
+    try:
+        network = parse_strict(cidr)
+    except ValueError as exc:
+        suggestion = str(parse(cidr))
+        raise CalcInputError("host_bits_set", f"Host bits are set; explicitly use {suggestion} to calculate that range.", suggestion) from exc
+    return text, kind, network
+
+
+def calculate_network(value: str, plan: Plan | None = None) -> dict:
+    """Calculate IPv4 boundaries and complete plan context without mutation."""
+    text, kind, net = parse_calculator_input(value)
+    prefix = net.prefixlen
+    start = int(net.network_address)
+    end = int(net.broadcast_address)
+    conventional = prefix <= 30
+    records = list(_all_owned_records(plan)) if plan is not None else []
+    ordered = sorted(enumerate(records), key=lambda item: (
+        int(item[1][2].network_address), item[1][2].prefixlen, item[1][0], item[0]))
+
+    def reference(item):
+        record_kind, record, parsed = item
+        return dict(kind=record_kind, cidr=str(parsed), name=record.name,
+                    description=record.description, tags=list(record.tags))
+
+    supers = [reference(item) for _, item in sorted(
+        enumerate(records), key=lambda item: (-item[1][2].prefixlen, item[0]))
+        if item[0] == "supernet" and net.subnet_of(item[2])]
+    containing = supers[0] if supers else None
+    return dict(
+        ok=True, input=text, input_kind=kind, cidr=str(net),
+        network_address=str(net.network_address), range_end=str(net.broadcast_address),
+        broadcast_address=str(net.broadcast_address) if conventional else None,
+        broadcast_kind="directed" if conventional else (
+            "none_point_to_point" if prefix == 31 else "none_single_host"),
+        first_usable_host=str(ipaddress.IPv4Address(start + (1 if conventional else 0))),
+        last_usable_host=str(ipaddress.IPv4Address(end - (1 if conventional else 0))),
+        usable_host_count=net.num_addresses - (2 if conventional else 0),
+        total_addresses=net.num_addresses, prefix_length=prefix,
+        netmask=str(net.netmask), wildcard=str(net.hostmask),
+        host_semantics="conventional" if conventional else (
+            "point_to_point" if prefix == 31 else "single_host"),
+        containing_supernet=containing, containing_supernets=supers,
+        next_prefix_subnets=[str(child) for child in net.subnets()] if prefix < 32 else [],
+        records_inside=[reference(item) for _, item in ordered if item[2] != net and item[2].subnet_of(net)],
+        equal_records=[reference(item) for _, item in ordered if item[2] == net],
+        containing_records=[reference(item) for _, item in ordered if item[2] != net and net.subnet_of(item[2])],
+        context_message=(f"Containing supernet: {containing['cidr']}." if containing else
+                         "No supernet in this plan contains the entire input range."),
+    )

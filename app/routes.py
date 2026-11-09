@@ -536,3 +536,51 @@ def commit_carve(name: str):
         committed.append(proposal['cidr'])
     storage.save_plan(_plans_dir(), trial)
     return jsonify(ok=True, committed=committed, rejected=[])
+
+
+@bp.post("/plans/<name>/calculate")
+def calculate(name: str):
+    def response(body, status=200):
+        result = jsonify(body)
+        result.status_code = status
+        result.headers["Cache-Control"] = "no-store"
+        return result
+
+    def error(code, message, status):
+        return response(dict(ok=False, code=code, error=message), status)
+
+    if request.mimetype != "application/json":
+        return error("unsupported_media_type", "Expected application/json", 415)
+    if request.content_length and request.content_length > 4096:
+        return error("request_too_large", "Request exceeds 4 KiB", 413)
+    raw = request.stream.read(4097)
+    if len(raw) > 4096:
+        return error("request_too_large", "Request exceeds 4 KiB", 413)
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return error("invalid_json", "Malformed JSON", 400)
+    try:
+        if request.args or not isinstance(body, dict) or set(body) != {"input"}:
+            raise planning.CalcInputError("invalid_input", 'Send exactly {"input": "..."} without query parameters.')
+        planning.parse_calculator_input(body["input"])
+    except planning.CalcInputError as exc:
+        return response(dict(ok=False, code=exc.code, error=exc.message,
+                             field="input", suggested_cidr=exc.suggested_cidr), 422)
+    try:
+        storage.safe_name(name)
+    except ValueError:
+        return error("invalid_plan_name", "Invalid plan name", 400)
+    try:
+        plan = storage.load_plan(_plans_dir(), name)
+        result = planning.calculate_network(body["input"], plan)
+    except FileNotFoundError:
+        return error("plan_not_found", "Plan not found", 404)
+    # CalcInputError subclasses ValueError, so it must be caught ahead of the
+    # plan-data net below or a 422 would be reported as a 500.
+    except planning.CalcInputError as exc:
+        return response(dict(ok=False, code=exc.code, error=exc.message,
+                             field="input", suggested_cidr=exc.suggested_cidr), 422)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return error("invalid_plan_data", "Plan contains invalid data", 500)
+    return response(result)
