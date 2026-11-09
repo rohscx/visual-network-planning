@@ -613,7 +613,7 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* ---- Right rail: command panel ---- */
 .rail-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-bottom: 1px solid var(--line);
   background: var(--bg-1);
 }
@@ -1348,3 +1348,13 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   text-anchor: middle;
   pointer-events: none;
 }
+
+/* Request attempts wrap within the command rail, including imported metadata. */
+.rail-tabs button { min-width: 0; padding-inline: 2px; font-size: 10px; letter-spacing: 0.02em; }
+[data-panel="request"] textarea { width: 100%; box-sizing: border-box; resize: vertical; background: var(--bg); color: var(--fg-2); border: 1px solid var(--line); padding: 8px; font: 11px/1.5 'JetBrains Mono', monospace; }
+[data-panel="request"] .hint { color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.request-attempt { border-top: 1px solid var(--line); padding: 10px 0; font-size: 11px; line-height: 1.5; color: var(--fg-2); overflow-wrap: anywhere; }
+.request-attempt p { margin: 4px 0; }
+.request-attempt label { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0; }
+.request-attempt input { flex: none; width: auto; }
+.rail button:focus-visible, .rail input:focus-visible, .rail textarea:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }

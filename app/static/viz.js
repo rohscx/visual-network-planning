@@ -256,6 +256,8 @@ async function fetchPlan() {
 }
 
 async function refresh() {
+  manualPreviewGeneration++;
+  invalidateRequest('Plan refreshed; preview again.');
   await fetchPlan();
   // If the detail panel is open on a record that just disappeared (the
   // user deleted it from another tab, or reclassified to a different
@@ -1264,12 +1266,13 @@ function hideTooltip() { tooltip.classList.remove('on'); }
 //  Carve: multi-parent preview + commit
 //==========================================================
 function eligibleParents() {
-  // Reservations are explicitly excluded from carving — that's the whole point.
   return TREE.items.filter(i =>
-    i.kind !== 'reservation' && (
-      ((i.kind === 'supernet' || i.children.length > 0) && (i.free || []).length > 0)
-      || (i.kind === 'supernet' && i.children.length === 0)
-    )
+    i.kind !== 'reservation' &&
+    !TREE.items.some(r => r.kind === 'reservation' && isSubnetOf(i.cidr, r.cidr)) &&
+    TREE.items.filter(r => r.cidr === i.cidr).length === 1 &&
+    (i.kind === 'supernet' || (i.children.length > 0 &&
+      TREE.items.some(r => r.kind === 'supernet' && r.cidr !== i.cidr && isSubnetOf(i.cidr, r.cidr)))) &&
+    (i.free || []).length > 0
   );
 }
 
@@ -1433,45 +1436,14 @@ function prefixForHosts(hosts) {
   return p;
 }
 
-function proposeForParent(parentCidr, mode, value, repeat = 1) {
-  const parentNode = TREE.items.find(i => i.cidr === parentCidr);
-  if (!parentNode) return [{ parent: parentCidr, cidr: null, reason: 'unknown' }];
-
-  const targetPrefix = mode === 'prefix' ? value
-                     : mode === 'hosts'  ? prefixForHosts(value)
-                     :                     parentNode.prefix + Math.ceil(Math.log2(value));
-  if (targetPrefix < parentNode.prefix || targetPrefix > 32) {
-    return [{ parent: parentCidr, cidr: null, reason: `/${targetPrefix} doesn't fit in /${parentNode.prefix}` }];
-  }
-
-  const want = Math.pow(2, 32 - targetPrefix);
-  const freeRanges = (parentNode.free || []).map(cidrInfo).map(r => ({ start: r.start, end: r.end }));
-  freeRanges.sort((a,b) => a.start - b.start);
-
-  const out = [];
-  for (let i = 0; i < repeat; i++) {
-    let placed = null;
-    for (const r of freeRanges) {
-      const aligned = Math.ceil(r.start / want) * want;
-      if (aligned + want <= r.end) {
-        placed = aligned;
-        r.start = aligned + want;
-        break;
-      }
-    }
-    if (placed === null) {
-      out.push({ parent: parentCidr, cidr: null, reason: out.length === 0 ? 'no free slot' : `only ${out.length} of ${repeat} fit` });
-      break;
-    }
-    out.push({ parent: parentCidr, cidr: `${intToIp(placed)}/${targetPrefix}`, parentNode });
-  }
-  return out;
-}
-
-function runPreview(forcedCidr, forcedParent) {
+let manualPreviewGeneration = 0;
+async function runPreview(forcedCidr, forcedParent) {
+  if (REQUEST.busy) return;
+  invalidateRequest('Manual preview replaced the request preview.');
+  const generation = ++manualPreviewGeneration;
   // Forced-cidr mode (free-block click): exactly one proposal at the
   // clicked spot, regardless of stale repeat count or selected-parent
-  // set. Bypassing proposeForParent here also avoids the case where a
+  // set. Bypassing the request simulation also avoids the case where a
   // previous "repeat: 4" carve session leaves N-1 extra proposals
   // scattered around the same supernet.
   if (forcedCidr && forcedParent) {
@@ -1489,7 +1461,29 @@ function runPreview(forcedCidr, forcedParent) {
   const value = +document.getElementById('carveValue').value;
   const repeat = Math.max(1, Math.min(64, +document.getElementById('carveRepeat').value || 1));
 
-  STATE.proposals = [...SELECTED_PARENTS].flatMap(p => proposeForParent(p, mode, value, repeat));
+  const item = {
+    id: 'manual', parents: [...SELECTED_PARENTS], repeat,
+    name_template: document.getElementById('carveName').value,
+    tags: document.getElementById('carveTags').value.split(',').map(s => s.trim()).filter(Boolean),
+    [{prefix: 'prefix_length', hosts: 'host_count', split: 'count'}[mode]]: value,
+  };
+  STATE.proposals = [];
+  renderProposals(); renderViz();
+  try {
+    const response = await fetch(URL_PLAN.replace('/plan.json', '/carve_request/preview'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({version: 1, items: [item]}),
+    });
+    const data = await response.json();
+    if (generation !== manualPreviewGeneration) return;
+    if (!response.ok) throw new Error(requestErrorText(data));
+    STATE.proposals = data.results.flatMap(r => r.proposals.length
+      ? r.proposals.map(p => ({...p, serverResolved: true}))
+      : [{parent: r.parent, cidr: null, reason: r.message}]);
+  } catch (error) {
+    if (generation !== manualPreviewGeneration) return;
+    toast(String(error), 'err');
+  }
 
   renderProposals();
   renderViz();
@@ -1508,6 +1502,7 @@ function enrichProposals() {
   const tmpl = document.getElementById('carveName').value || '';
   const perParentIdx = {};
   return STATE.proposals.map((p) => {
+    if (p.serverResolved) return {...p, childName: p.name};
     let childName = '';
     if (p.cidr) {
       perParentIdx[p.parent] = (perParentIdx[p.parent] || 0) + 1;
@@ -1519,7 +1514,7 @@ function enrichProposals() {
 
 function renderProposals() {
   const list = document.getElementById('proposalsList');
-  if (!STATE.proposals.length) {
+  if (REQUEST.preview || !STATE.proposals.length) {
     list.style.display = 'none';
     document.getElementById('carveCommitBtn').disabled = true;
     return;
@@ -1577,7 +1572,7 @@ function renderProposals() {
         <span class="icon">✕</span>
         <div>
           <div class="pcidr" style="color:var(--err);">${parentLabel}</div>
-          <div class="pmeta">${p.reason}</div>
+          <div class="pmeta">${escapeHtml(p.reason)}</div>
         </div>
         <span class="pill err">no fit</span>
       `;
@@ -1624,6 +1619,7 @@ async function commitCarve() {
   const tags = (document.getElementById('carveTags').value || '').split(',').map(s=>s.trim()).filter(Boolean);
   const perParentIdx = {};
   const allocations = ok.map((p) => {
+    if (p.serverResolved) return {cidr: p.cidr, name: p.name, tags: p.tags, description: p.description};
     perParentIdx[p.parent] = (perParentIdx[p.parent] || 0) + 1;
     return {
       cidr: p.cidr,
@@ -1659,6 +1655,181 @@ async function commitCarve() {
     btn.disabled = false;
   }
 }
+
+// One request snapshot owns its selections; raw draft text is never rewritten.
+const REQUEST = {generation: 0, preview: null, document: null, selected: new Set(), busy: false};
+const requestEl = id => document.getElementById(id);
+function requestErrorText(data) {
+  return [data.error || 'Request failed', ...(data.errors || []).map(e =>
+    `${e.path || '/'}${e.line ? ` (line ${e.line}, column ${e.column})` : ''}: ${e.message}`)].join('\n');
+}
+function invalidateRequest(message) {
+  REQUEST.generation++;
+  if (REQUEST.preview) STATE.proposals = [];
+  REQUEST.preview = null;
+  REQUEST.document = null;
+  REQUEST.selected.clear();
+  requestEl('requestCommitBtn').disabled = true;
+  requestEl('requestResults').replaceChildren();
+  if (message) requestEl('requestStatus').textContent = message;
+}
+function syncRequestSelection() {
+  const preview = REQUEST.preview;
+  if (!preview) return;
+  STATE.proposals = preview.results.flatMap(r => r.proposals)
+    .filter(p => REQUEST.selected.has(p.id)).map(p => ({...p, serverResolved: true}));
+  requestEl('requestCommitBtn').disabled = REQUEST.busy || !REQUEST.selected.size;
+  requestEl('requestCommitBtn').textContent = `commit ${REQUEST.selected.size} selected`;
+  requestEl('requestStatus').textContent = `${REQUEST.selected.size} selected${plural(REQUEST.selected.size, ' allocation')}` + `${preview.summary.failed_attempts ? `; ${preview.summary.failed_attempts} attempt${plural(preview.summary.failed_attempts)} cannot be placed` : ''}` + '. Only checked rows are committed.';
+  renderProposals(); renderViz();
+}
+const plural = (n, word = '') => `${word}${n === 1 ? '' : 's'}`;
+
+function renderRequestResults() {
+  const wrap = requestEl('requestResults');
+  wrap.replaceChildren();
+  const labels = {capacity: 'Does not fit', conflict: 'Resolve conflict',
+    missing_parent: 'Choose an existing parent', reserved_parent: 'Choose an unreserved parent'};
+  for (const result of REQUEST.preview.results) {
+    const row = document.createElement('div');
+    row.className = 'request-attempt';
+    const heading = document.createElement('div');
+    heading.textContent = `${result.item_id} · ${result.parent} · attempt ${result.iteration}`;
+    row.appendChild(heading);
+    const reason = document.createElement('p');
+    reason.textContent = `${labels[result.reason_code] || 'Fits'}: ${result.message}`;
+    row.appendChild(reason);
+    for (const proposal of result.proposals) {
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox'; checkbox.checked = true;
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) REQUEST.selected.add(proposal.id);
+        else REQUEST.selected.delete(proposal.id);
+        syncRequestSelection();
+      });
+      const text = document.createElement('span');
+      text.textContent = [proposal.cidr, proposal.name, proposal.tags.join(', '), proposal.description].filter(Boolean).join(' · ');
+      label.append(checkbox, text); row.appendChild(label);
+    }
+    wrap.appendChild(row);
+  }
+  syncRequestSelection();
+}
+function requestBusy(busy) {
+  REQUEST.busy = busy;
+  for (const id of ['requestPreviewBtn', 'requestDiscardBtn', 'requestFile', 'requestText']) requestEl(id).disabled = busy;
+  requestEl('requestCommitBtn').disabled = busy || !REQUEST.preview || !REQUEST.selected.size;
+  requestEl('requestResults').querySelectorAll('input').forEach(el => el.disabled = busy);
+}
+async function previewRequest() {
+  if (REQUEST.busy) return;
+  ++manualPreviewGeneration;
+  invalidateRequest('Checking request…');
+  STATE.proposals = []; renderProposals(); renderViz();
+  const raw = requestEl('requestText').value;
+  const generation = REQUEST.generation;
+  requestBusy(true);
+  try {
+    const response = await fetch(URL_PLAN.replace('/plan.json', '/carve_request/preview'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: raw,
+    });
+    const data = await response.json();
+    if (generation !== REQUEST.generation) return;
+    if (!response.ok) {
+      requestEl('requestStatus').textContent = requestErrorText(data);
+      return;
+    }
+    REQUEST.document = JSON.parse(raw);
+    REQUEST.preview = data;
+    REQUEST.selected = new Set(data.results.flatMap(r => r.proposals.map(p => p.id)));
+    renderRequestResults();
+  } catch (error) {
+    if (generation === REQUEST.generation) requestEl('requestStatus').textContent = `Preview failed: ${error}. Retry when ready.`;
+  } finally {
+    requestBusy(false);
+    requestEl('requestText').focus();
+  }
+}
+async function commitRequest() {
+  if (REQUEST.busy || !REQUEST.preview || !REQUEST.selected.size) return;
+  requestBusy(true);
+  const body = {carve_request: REQUEST.document, plan_revision: REQUEST.preview.plan_revision,
+    selection: REQUEST.preview.summary.all_fit && REQUEST.selected.size === REQUEST.preview.summary.proposed_allocations ? 'all' : 'fitting',
+    selected_proposal_ids: [...REQUEST.selected]};
+  requestEl('requestStatus').textContent = 'Committing selected allocations…';
+  try {
+    const response = await fetch(URL_CARVE, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      invalidateRequest(`${requestErrorText(data)}. Preview again before committing.`);
+      renderViz();
+      return;
+    }
+    invalidateRequest();
+    STATE.proposals = [];
+    await refresh();
+    requestEl('requestStatus').textContent = `Committed ${data.committed.length} allocations. Request text retained.`;
+  } catch (error) {
+    invalidateRequest();
+    await refresh();
+    requestEl('requestStatus').textContent = `Commit response uncertain: ${error}. Plan reloaded; preview again before retrying.`;
+  } finally {
+    requestBusy(false);
+    requestEl('requestPreviewBtn').focus();
+  }
+}
+requestEl('requestText').addEventListener('input', () => {
+  invalidateRequest('Request changed; check / preview again.'); renderViz(); renderProposals();
+});
+requestEl('requestPreviewBtn').addEventListener('click', previewRequest);
+requestEl('requestCommitBtn').addEventListener('click', commitRequest);
+requestEl('requestDiscardBtn').addEventListener('click', () => {
+  invalidateRequest('Preview discarded; nothing saved.'); renderViz(); renderProposals();
+});
+async function loadRequestFile(file) {
+  if (!file || REQUEST.busy) return;
+  if (!file.name.toLowerCase().endsWith('.json') || file.size > 1048576) {
+    requestEl('requestStatus').textContent = 'Choose a .json file no larger than 1 MiB.'; return;
+  }
+  invalidateRequest('Loading file…');
+  const generation = REQUEST.generation;
+  renderViz(); renderProposals();
+  try {
+    const text = new TextDecoder('utf-8', {fatal: true}).decode(await file.arrayBuffer());
+    if (generation !== REQUEST.generation) return;
+    requestEl('requestText').value = text;
+    requestEl('requestStatus').textContent = 'File loaded. Check / preview to validate; nothing saved.';
+    requestEl('requestText').focus();
+  } catch (error) {
+    if (generation === REQUEST.generation) requestEl('requestStatus').textContent = `Cannot read UTF-8 file: ${error}`;
+  }
+}
+requestEl('requestFile').addEventListener('change', event => loadRequestFile(event.target.files[0]));
+requestEl('requestText').addEventListener('dragover', event => event.preventDefault());
+requestEl('requestText').addEventListener('drop', event => {
+  event.preventDefault(); loadRequestFile(event.dataTransfer.files[0]);
+});
+requestEl('requestPromptBtn').addEventListener('click', event => withButtonLock(event.currentTarget, async () => {
+  const status = requestEl('requestPromptStatus');
+  status.textContent = 'Loading current plan prompt…';
+  try {
+    const response = await fetch(URL_PLAN.replace('/plan.json', '/carve_prompt'), {cache: 'no-store'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(requestErrorText(data));
+    const scope = `${data.parents.length} eligible parents · revision ${data.plan_revision.slice(0, 12)}.`;
+    requestEl('requestPromptText').value = data.prompt;
+    try {
+      await navigator.clipboard.writeText(data.prompt);
+      requestEl('requestPromptFallback').hidden = true;
+      status.textContent = `Prompt copied. ${scope}`;
+    } catch {
+      requestEl('requestPromptFallback').hidden = false;
+      requestEl('requestPromptText').focus(); requestEl('requestPromptText').select();
+      status.textContent = `Clipboard unavailable. Selected prompt: copy it manually. ${scope}`;
+    }
+  } catch (error) { status.textContent = `Prompt failed: ${error}`; }
+}));
 
 //==========================================================
 //  Add / Edit / Delete (server calls + refresh)
@@ -1983,11 +2154,20 @@ document.getElementById('parentSelectSupers').addEventListener('click', () => {
 document.getElementById('carvePreviewBtn').addEventListener('click', () => runPreview());
 document.getElementById('carveCommitBtn').addEventListener('click', commitCarve);
 
-// Live-update proposal name labels as the template is edited — saves a
-// click on "preview" just to see the substituted names.
-document.getElementById('carveName').addEventListener('input', () => {
-  if (STATE.proposals.length) renderProposals();
-});
+// Server-resolved previews are snapshots; edits require another preview.
+function invalidateManualPreview() {
+  manualPreviewGeneration++;
+  if (!REQUEST.preview && STATE.proposals.some(p => p.serverResolved)) {
+    STATE.proposals = []; renderViz();
+  }
+  renderProposals();
+}
+document.querySelector('[data-panel="carve"]').addEventListener('input', invalidateManualPreview);
+document.getElementById('carveMode').addEventListener('click', invalidateManualPreview);
+document.getElementById('parentPicker').addEventListener('click', invalidateManualPreview);
+for (const id of ['parentSelectAll', 'parentSelectNone', 'parentSelectSupers']) {
+  document.getElementById(id).addEventListener('click', invalidateManualPreview);
+}
 
 document.getElementById('addSubmit').addEventListener('click', (e) =>
   withButtonLock(e.currentTarget, addRecord));

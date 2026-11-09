@@ -311,3 +311,115 @@ def validate_new_allocation(plan: Plan, new_cidr: str) -> tuple[bool, str]:
         if new_net.overlaps(rn) and not new_net.subnet_of(rn) and not rn.subnet_of(new_net):
             return False, f"Partial overlap with reservation {r.cidr}"
     return True, ""
+
+
+def _request_records(plan: Plan) -> list[tuple[Allocation, IPv4Net, str]]:
+    records = [(record, kind) for kind, bucket in (
+        ('supernet', plan.supernets), ('allocation', plan.allocations),
+        ('reservation', plan.reservations)) for record in bucket]
+    return [(record, net, kind) for (record, kind), (_, net)
+            in zip(records, _all_owned_pairs(plan))]
+
+
+def _request_parent(records, parent):
+    matches = [(r, n, k) for r, n, k in records if n == parent]
+    reserved = [(r, n, k) for r, n, k in records
+                if k == 'reservation' and parent.subnet_of(n)]
+    if reserved:
+        return 'parent_is_reservation', 'reserved_parent', 'Parent is a reservation or inside one', reserved
+    if not matches:
+        return 'parent_not_found', 'missing_parent', 'Parent does not exist in this snapshot', []
+    if len(matches) > 1:
+        return 'conflicts_existing', 'conflict', 'Multiple records resolve to this parent', matches
+    _, _, kind = matches[0]
+    if kind == 'allocation' and (
+        not any(parent != n and parent.subnet_of(n) and k == 'supernet' for _, n, k in records)
+        or not any(n != parent and n.subnet_of(parent) for _, n, _ in records)
+    ):
+        return 'will_not_fit', 'capacity', 'Parent is an occupied leaf or orphan allocation', matches
+    return None
+
+
+def request_parent_inventory(plan: Plan) -> tuple[list[dict], list[dict]]:
+    records = _request_records(plan)
+    parents, warnings, seen = [], [], set()
+    for rec, net, kind in records:
+        if net in seen:
+            continue
+        seen.add(net)
+        issue = _request_parent(records, net)
+        if issue:
+            warnings.append(dict(code=issue[1], cidr=str(net), message=issue[2]))
+            continue
+        free = _free_space(net, [n for _, n, _ in records if n != net])
+        if free:
+            parents.append(dict(cidr=str(net), name=rec.name, kind=kind,
+                                direct_free_cidrs=list(map(str, free)),
+                                direct_free_addresses=sum(n.num_addresses for n in free),
+                                largest_free_cidr=str(max(free, key=lambda n: n.num_addresses))))
+    return parents, warnings
+
+
+def simulate_carve_request(plan: Plan, document: dict, max_allocations: int) -> dict:
+    """Simulate a normalized, bounded request without mutating any input record."""
+    import re
+
+    expansion = sum(len(i['parents']) * i['repeat'] * i.get('count', 1) for i in document['items'])
+    if expansion > max_allocations:
+        raise ValueError('Request expansion exceeds allocation cap')
+    working = Plan.from_dict(plan.to_dict())
+    original = _request_records(plan)
+    counters, results = {}, []
+    for item in document['items']:
+        mode = next(k for k in ('prefix_length', 'host_count', 'count') if k in item)
+        for parent_index, cidr in enumerate(item['parents']):
+            parent = parse(cidr)
+            issue = _request_parent(original, parent)
+            for iteration in range(item['repeat']):
+                result = dict(item_id=item['id'], parent=cidr, iteration=iteration + 1,
+                              status='will_succeed', reason_code=None, message='', conflicts=[], proposals=[])
+                failure = issue
+                if not failure:
+                    used = [n for _, n in _all_owned_pairs(working) if n != parent]
+                    free = _free_space(parent, used)
+                    proposed = carve(cidr, [c for c, _ in _all_owned_pairs(working)], **{mode: item[mode]})
+                    if not proposed:
+                        message = 'No aligned free slot of the requested size fits (capacity or fragmentation)'
+                        if mode == 'count':
+                            message = 'Equal split requires an entirely empty parent and enough addresses'
+                        elif mode == 'prefix_length' and item[mode] < parent.prefixlen:
+                            message = 'Requested prefix is larger than the parent'
+                        failure = ('will_not_fit', 'capacity', message, [])
+                    else:
+                        trial = Plan.from_dict(working.to_dict())
+                        parent_record = next(r for r, n, _ in original if n == parent)
+                        for child_index, child in enumerate(proposed):
+                            ok, message = validate_new_allocation(trial, child)
+                            if not ok:
+                                conflicts = [(r, n, k) for r, n, k in _request_records(trial) if n == parse(child)]
+                                failure = ('conflicts_existing', 'conflict', message, conflicts)
+                                break
+                            if not any(parse(child).subnet_of(f) for f in free):
+                                failure = ('will_not_fit', 'capacity', 'Proposal is outside direct free space', [])
+                                break
+                            number = counters.get(cidr, 0) + child_index + 1
+                            label = re.sub(r'\{(parent|n)\}', lambda m: (parent_record.name or cidr)
+                                           if m[1] == 'parent' else str(number), item['name_template'])
+                            proposal = dict(id=f"{item['id']}:{parent_index}:{iteration}:{child_index}",
+                                            parent=cidr, cidr=child, name=label,
+                                            tags=list(item['tags']), description=item['description'])
+                            result['proposals'].append(proposal)
+                            trial.allocations.append(Allocation(child, label, item['description'], list(item['tags'])))
+                        if not failure:
+                            working = trial
+                            counters[cidr] = counters.get(cidr, 0) + len(proposed)
+                            noun = 'subnet' if len(proposed) == 1 else 'subnets'
+                            result['message'] = f'{len(proposed)} {noun} fit'
+                if failure:
+                    result.update(status=failure[0], reason_code=failure[1], message=failure[2], proposals=[],
+                                  conflicts=[dict(kind=k, cidr=str(n), name=r.name) for r, n, k in failure[3]])
+                results.append(result)
+    successes = sum(r['status'] == 'will_succeed' for r in results)
+    return dict(results=results, summary=dict(attempts=len(results), successful_attempts=successes,
+                failed_attempts=len(results) - successes,
+                proposed_allocations=sum(len(r['proposals']) for r in results), all_fit=successes == len(results)))

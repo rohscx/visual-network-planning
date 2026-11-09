@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from functools import wraps
+import hashlib
+import json
 
 from flask import (
     Blueprint, abort, current_app, flash, jsonify, redirect,
     render_template, request, url_for,
 )
 
-from . import infoblox, planning, storage
-from .models import Allocation
+from . import carve_request, infoblox, planning, storage
+from .models import Allocation, Plan
 
 bp = Blueprint("main", __name__)
 
@@ -308,9 +311,8 @@ def delete_record(name: str):
     return jsonify(ok=True)
 
 
-@bp.post("/plans/<name>/commit_carve")
-def commit_carve(name: str):
-    """Apply a list of pre-computed carved allocations atomically.
+def _commit_legacy(name: str, p: dict):
+    """Apply pre-computed allocations, saving accepted entries even if others fail.
 
     Body (JSON): {
         "allocations": [
@@ -322,8 +324,7 @@ def commit_carve(name: str):
     Each entry is validated through validate_new_allocation against the plan
     *as it grows*, so two same-CIDR proposals would reject the second.
     """
-    plan = _load_or_404(name)
-    p = _params()
+    plan = _request_plan(name)
     items = p.get("allocations") or []
     if not isinstance(items, list) or not items:
         return jsonify(ok=False, error="no allocations to commit"), 400
@@ -337,6 +338,11 @@ def commit_carve(name: str):
             error=f"too many allocations ({len(items)}); cap is {_MAX_COMMIT_ALLOCS}",
         ), 400
 
+    if any(not isinstance(entry, dict)
+           or any(not isinstance(entry.get(k, ''), str) for k in ('cidr', 'name', 'description'))
+           or not isinstance(entry.get('tags', []), (list, str))
+           for entry in items):
+        return jsonify(ok=False, error="invalid allocation fields"), 400
     committed = []
     rejected = []
     for entry in items:
@@ -427,3 +433,106 @@ def import_infoblox(name: str):
         rejected=rejected,
         parse_errors=result["errors"],
     )
+
+
+def _request_response(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        try:
+            result = fn(*args, **kwargs)
+        except carve_request.RequestError as exc:
+            result = (jsonify(ok=False, valid=False, code=exc.code, error=str(exc), errors=exc.errors), exc.status)
+        except Exception:
+            current_app.logger.exception('Carve request failed')
+            result = (jsonify(ok=False, code='request_failed', error='Could not process or save request'), 500)
+        response = current_app.make_response(result)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    return wrapped
+
+
+def _request_plan(name):
+    try:
+        storage.safe_name(name)
+    except ValueError as exc:
+        raise carve_request.RequestError('invalid_plan_name', 'Invalid plan name', 400) from exc
+    try:
+        return storage.load_plan(_plans_dir(), name)
+    except FileNotFoundError as exc:
+        raise carve_request.RequestError('plan_not_found', 'Plan not found', 404) from exc
+
+
+def _plan_revision(plan):
+    raw = json.dumps(plan.to_dict(), sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def _request_json():
+    if not request.is_json:
+        raise carve_request.RequestError('unsupported_media_type', 'Expected application/json', 415)
+    if request.content_length and request.content_length > carve_request.MAX_REQUEST_BYTES:
+        raise carve_request.RequestError('request_too_large', 'Request exceeds 1 MiB', 413)
+    return carve_request.decode(request.stream.read(carve_request.MAX_REQUEST_BYTES + 1))
+
+
+@bp.get('/plans/<name>/carve_prompt')
+@_request_response
+def carve_prompt(name: str):
+    plan = _request_plan(name)
+    revision = _plan_revision(plan)
+    parents, warnings = planning.request_parent_inventory(plan)
+    return jsonify(ok=True, version=1, plan_revision=revision, parents=parents, warnings=warnings,
+                   limits=dict(max_allocations=_MAX_COMMIT_ALLOCS, max_repeat=64,
+                               max_request_bytes=carve_request.MAX_REQUEST_BYTES),
+                   prompt=carve_request.format_prompt(name, revision, parents, warnings, _MAX_COMMIT_ALLOCS))
+
+
+@bp.post('/plans/<name>/carve_request/preview')
+@_request_response
+def preview_carve_request(name: str):
+    document = carve_request.normalize(_request_json(), _MAX_COMMIT_ALLOCS)
+    plan = _request_plan(name)
+    return jsonify(ok=True, valid=True, plan_revision=_plan_revision(plan),
+                   **planning.simulate_carve_request(plan, document, _MAX_COMMIT_ALLOCS))
+
+
+@bp.post('/plans/<name>/commit_carve')
+@_request_response
+def commit_carve(name: str):
+    payload = _request_json()
+    if not isinstance(payload, dict):
+        raise carve_request.RequestError('invalid_schema', 'Expected an object')
+    if 'allocations' in payload and 'carve_request' not in payload:
+        return _commit_legacy(name, payload)
+    allowed = {'carve_request', 'plan_revision', 'selection', 'selected_proposal_ids'}
+    if set(payload) != allowed or not isinstance(payload.get('plan_revision'), str):
+        raise carve_request.RequestError('invalid_schema', 'Expected request, revision, selection and proposal IDs only')
+    document = carve_request.normalize(payload['carve_request'], _MAX_COMMIT_ALLOCS)
+    ids = payload['selected_proposal_ids']
+    selection = payload['selection']
+    if (selection not in ('all', 'fitting') or not isinstance(ids, list) or not ids
+            or any(not isinstance(i, str) for i in ids) or len(set(ids)) != len(ids)):
+        raise carve_request.RequestError('invalid_selection', 'Select a nonempty unique list of successful proposal IDs')
+    plan = _request_plan(name)
+    if payload['plan_revision'] != _plan_revision(plan):
+        return jsonify(ok=False, code='stale_plan', error='Plan changed; preview again', committed=[], rejected=[]), 409
+    simulated = planning.simulate_carve_request(plan, document, _MAX_COMMIT_ALLOCS)
+    proposals = [p for r in simulated['results'] for p in r['proposals']]
+    available = {p['id'] for p in proposals}
+    selected = set(ids)
+    if not selected <= available or (selection == 'all' and (
+            not simulated['summary']['all_fit'] or selected != available)):
+        raise carve_request.RequestError('invalid_selection', 'Selection does not match successful preview proposals')
+    trial = Plan.from_dict(plan.to_dict())
+    committed = []
+    for proposal in proposals:
+        if proposal['id'] not in selected:
+            continue
+        ok, reason = planning.validate_new_allocation(trial, proposal['cidr'])
+        if not ok:
+            return jsonify(ok=False, code='allocation_conflict', error=reason, committed=[], rejected=[]), 409
+        trial.allocations.append(Allocation(proposal['cidr'], proposal['name'],
+                                            proposal['description'], list(proposal['tags'])))
+        committed.append(proposal['cidr'])
+    storage.save_plan(_plans_dir(), trial)
+    return jsonify(ok=True, committed=committed, rejected=[])

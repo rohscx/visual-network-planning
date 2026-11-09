@@ -30,6 +30,7 @@ can be running in under a minute.
 
 ```
 app/planning.py    pure logic over ipaddress; no Flask, no I/O, no globals
+app/carve_request.py pure request parser and prompt formatting; no Flask, no I/O
 app/infoblox.py    pure CSV parser for Infoblox exports; no Flask, no I/O
 app/storage.py     JSON load/save; no Flask
 app/models.py      dataclasses; no Flask
@@ -157,6 +158,22 @@ Dark theme only. Before adding or changing a color token, check it:
   valid when the parent is entirely free)
 
 Passing more than one or none raises `ValueError`. Tests enforce this.
+
+## Versioned carve requests
+
+REQUEST prompt inventory and simulation share the pure parent eligibility and
+free-space functions in `planning.py`. Check reservation ancestors explicitly;
+`validate_new_allocation` permits strict containment and cannot enforce this.
+Simulation must leave the input Plan unchanged. Keep the parser, generated
+prompt, `docs/carve-request-schema.md`, and tests in sync when changing the
+contract. No separate request skill or standalone validator is maintained.
+
+The new `commit_carve` request form checks a canonical plan revision and
+re-simulates all attempts before selecting server-authored proposal IDs. It
+saves the selected batch once, all or none. The legacy `allocations` form
+continues to save whatever entries pass validation. Do not conflate them.
+Normal manual previews use the server simulator; clicked exact-slot previews
+remain distinct. Preserve the corrected host-sizing semantics.
 
 ## Infoblox CSV import
 

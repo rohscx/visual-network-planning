@@ -117,6 +117,7 @@
       <button data-tab="add"    aria-selected="true">+ add</button>
       <button data-tab="carve"  aria-selected="false">⊞ carve</button>
       <button data-tab="import" aria-selected="false">↥ import</button>
+      <button data-tab="request" aria-selected="false">⌁ request</button>
     </div>
 
     <!-- ADD -->
@@ -212,6 +213,32 @@
       <div class="commit-row">
         <button class="btn" id="carvePreviewBtn">preview</button>
         <button class="btn primary" id="carveCommitBtn" disabled>commit <span id="commitCount" style="opacity:0.7"></span></button>
+      </div>
+    </div>
+
+    <!-- REQUEST -->
+    <div class="panel" data-panel="request" style="display:none">
+      <h3>carve request</h3>
+      <button class="btn" id="requestPromptBtn">copy prompt for this plan</button>
+      <p class="hint" id="requestPromptStatus" role="status">Copy a current snapshot for your model. Nothing is sent automatically.</p>
+      <div id="requestPromptFallback" hidden>
+        <label for="requestPromptText" class="lbl">prompt — select and copy</label>
+        <textarea id="requestPromptText" rows="6" readonly></textarea>
+      </div>
+      <div class="field">
+        <label class="lbl" for="requestText">request JSON</label>
+        <textarea id="requestText" rows="10" spellcheck="false" placeholder='{"version":1,"items":[…]}'></textarea>
+      </div>
+      <div class="field">
+        <label class="lbl" for="requestFile">load .json file (or drop onto text)</label>
+        <input id="requestFile" type="file" accept=".json,application/json">
+      </div>
+      <button class="btn" id="requestPreviewBtn">check / preview</button>
+      <p id="requestStatus" class="hint" role="status" aria-live="polite">Paste a request to check it.</p>
+      <div id="requestResults" class="request-results"></div>
+      <div class="commit-row">
+        <button class="btn primary" id="requestCommitBtn" disabled>commit selected</button>
+        <button class="btn ghost" id="requestDiscardBtn">discard preview</button>
       </div>
     </div>
 

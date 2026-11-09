@@ -56,7 +56,7 @@ the `PLATFORMS` and `PYVERS` arrays you'd edit to add coverage.
 
 Three-pane plan view: hierarchy tree on the left, D3 nested-rectangle
 visualization in the middle (the hero), command rail on the right with
-**add / carve / import** tabs. Dark theme only — the aesthetic is
+**add / carve / import / request** tabs. Dark theme only — the aesthetic is
 terminal/engineering and a light variant felt out of place.
 JetBrains Mono for CIDRs, Geist Sans for prose.
 
@@ -80,8 +80,16 @@ there exactly as in detail). The choice is remembered per browser, and
   - **equal split** (`4` → four equal power-of-two subnets).
   Run one query against **multiple parents** at once with a per-parent
   **repeat** count; preview the proposed CIDRs as dashed-mint overlays
-  in the viz, then commit them all atomically. Name template supports
+  in the viz, then commit the accepted allocations. Manual commit preserves
+  its legacy partial-save behavior if another entry is rejected. Name template supports
   `{parent}` and `{n}` (e.g. `{parent}.elb-{n}`, `{n}` resets per parent).
+- **Request** — copy a fresh server-generated prompt, ask your model for a
+  versioned JSON carve request, then paste it or load a `.json` file in the
+  REQUEST tab. Check/preview shows each attempt and dashed mint proposals.
+  Select the successful allocations you want and explicitly commit them.
+  This path re-simulates server-side, rejects stale previews, and saves all
+  selected entries or none. Files only load text; no external model is called.
+  See [the request schema](docs/carve-request-schema.md) for limits and examples.
 - **Reservations** — a third entry type alongside supernet/allocation. A
   reservation consumes free space (so future carves skip it) but is **never
   carved into itself**. Use it for ranges you want to keep off-limits —

@@ -115,3 +115,131 @@ def test_import_accepts_modest_payload(client, seeded_plan):
         content_type="multipart/form-data",
     )
     assert r.status_code == 200
+
+
+@pytest.fixture
+def request_plan(monkeypatch, client):
+    """In-memory storage isolates request contracts from filesystem behavior."""
+    import copy
+    state = {'plan': Plan('request', supernets=[Allocation('192.0.2.0/24', 'east')]), 'saves': 0}
+    def load(*args):
+        return copy.deepcopy(state['plan'])
+    def save(directory, plan):
+        state['saves'] += 1
+        state['plan'] = copy.deepcopy(plan)
+    monkeypatch.setattr(storage, 'load_plan', load)
+    monkeypatch.setattr(storage, 'save_plan', save)
+    return state
+
+
+def request_doc(**changes):
+    return dict(version=1, items=[dict(id='a', parents=['192.0.2.0/24'], prefix_length=26,
+                                     name_template='{parent}-{n}', **changes)])
+
+
+def envelope(client, doc, **changes):
+    preview = client.post('/plans/request/carve_request/preview', json=doc).get_json()
+    result = dict(carve_request=doc, plan_revision=preview['plan_revision'], selection='fitting',
+                  selected_proposal_ids=[p['id'] for r in preview['results'] for p in r['proposals']])
+    result.update(changes)
+    return result
+
+
+def test_request_prompt_preview_and_partial_commit(client, request_plan):
+    prompt = client.get('/plans/request/carve_prompt')
+    assert prompt.headers['Cache-Control'] == 'no-store'
+    assert prompt.json['parents'][0]['direct_free_addresses'] == 256
+    assert 'BEGIN PLAN DATA' in prompt.json['prompt']
+    assert 'host_count' in prompt.json['prompt']
+    doc = request_doc(repeat=5)
+    payload = envelope(client, doc, selected_proposal_ids=['a:0:2:0'])
+    assert request_plan['saves'] == 0
+    response = client.post('/plans/request/commit_carve', json=payload)
+    assert response.status_code == 200
+    assert response.json['committed'] == ['192.0.2.128/26']
+    assert request_plan['plan'].allocations[0].name == 'east-3'
+    assert request_plan['saves'] == 1
+    stale = client.post('/plans/request/commit_carve', json=payload)
+    assert stale.status_code == 409 and stale.json['code'] == 'stale_plan'
+    assert request_plan['saves'] == 1
+
+
+@pytest.mark.parametrize('change', [dict(selection='all'), dict(selected_proposal_ids=[]),
+    dict(selected_proposal_ids=['bogus']), dict(selected_proposal_ids=['a:0:0:0'] * 2),
+    dict(selection='other'), dict(allocations=[]), dict(cidr='192.0.2.0/25')])
+def test_request_rejects_selection_and_forged_fields(client, request_plan, change):
+    payload = envelope(client, request_doc(repeat=5), **change)
+    assert client.post('/plans/request/commit_carve', json=payload).status_code == 422
+    assert request_plan['saves'] == 0
+
+
+def test_request_all_split_subset_and_save_failure(client, request_plan, monkeypatch):
+    doc = dict(version=1, items=[dict(id='s', parents=['192.0.2.0/24'], count=4)])
+    payload = envelope(client, doc, selection='all')
+    assert client.post('/plans/request/commit_carve', json=payload).status_code == 200
+    assert len(request_plan['plan'].allocations) == 4
+    request_plan['plan'].allocations.clear()
+    payload = envelope(client, doc, selected_proposal_ids=['s:0:0:2'])
+    def fail(*args):
+        raise OSError('secret path')
+    monkeypatch.setattr(storage, 'save_plan', fail)
+    response = client.post('/plans/request/commit_carve', json=payload)
+    assert response.status_code == 500
+    assert 'secret path' not in response.get_data(as_text=True)
+    assert request_plan['plan'].allocations == []
+
+
+@pytest.mark.parametrize('raw,status,code', [('{', 400, 'invalid_json'), ('[]', 422, 'invalid_schema'),
+    ('{"version":1,"version":1,"items":[]}', 400, 'invalid_json'),
+    ('{"version":2,"items":[]}', 422, 'invalid_schema'), (' ' * 1048577, 413, 'request_too_large')])
+def test_request_validation_never_simulates(client, request_plan, monkeypatch, raw, status, code):
+    monkeypatch.setattr(routes.planning, 'simulate_carve_request', lambda *args: pytest.fail('simulation reached'))
+    response = client.post('/plans/request/carve_request/preview', data=raw, content_type='application/json')
+    assert response.status_code == status and response.json['code'] == code
+    assert response.json['valid'] is False
+    assert 'results' not in response.json
+    assert request_plan['saves'] == 0
+    assert response.headers['Cache-Control'] == 'no-store'
+
+
+def test_request_media_missing_invalid_plan_and_revision(client, request_plan, monkeypatch):
+    assert client.post('/plans/request/carve_request/preview', data='{}').status_code == 415
+    payload = envelope(client, request_doc())
+    request_plan['plan'].supernets[0].name = 'renamed'
+    assert client.post('/plans/request/commit_carve', json=payload).status_code == 409
+    assert client.get('/plans/!bad/carve_prompt').status_code == 400
+    def missing(*args):
+        raise FileNotFoundError()
+    monkeypatch.setattr(storage, 'load_plan', missing)
+    response = client.get('/plans/missing/carve_prompt')
+    assert response.status_code == 404 and response.is_json
+
+
+def test_legacy_keeps_partial_save(client, request_plan):
+    response = client.post('/plans/request/commit_carve', json={'allocations': [
+        dict(cidr='192.0.2.0/26', name='accepted'), dict(cidr='192.0.2.0/24', name='duplicate')]})
+    assert response.status_code == 200 and response.json['ok']
+    assert response.json['committed'] == ['192.0.2.0/26']
+    assert len(response.json['rejected']) == 1
+    assert request_plan['saves'] == 1
+
+
+def test_split_partial_selection_preserves_metadata(client, request_plan):
+    doc = dict(version=1, items=[dict(id='s', parents=['192.0.2.0/24'], count=4,
+                                    name_template='{parent}-{n}', tags=['prod', 'prod'], description='keep me')])
+    payload = envelope(client, doc, selected_proposal_ids=['s:0:0:3'])
+    response = client.post('/plans/request/commit_carve', json=payload)
+    assert response.json['committed'] == ['192.0.2.192/26']
+    assert request_plan['plan'].allocations[0].to_dict() == dict(
+        cidr='192.0.2.192/26', name='east-4', tags=['prod', 'prod'], description='keep me')
+
+
+def test_empty_inventory_and_no_fit_are_successful_responses(client, request_plan):
+    request_plan['plan'].supernets.clear()
+    prompt = client.get('/plans/request/carve_prompt')
+    assert prompt.status_code == 200 and prompt.json['parents'] == []
+    preview = client.post('/plans/request/carve_request/preview', json=request_doc(repeat=3))
+    assert preview.status_code == 200 and preview.json['valid']
+    assert preview.json['summary']['failed_attempts'] == 3
+    assert all(r['status'] == 'parent_not_found' for r in preview.json['results'])
+    assert request_plan['saves'] == 0

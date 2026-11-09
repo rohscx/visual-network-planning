@@ -415,3 +415,105 @@ def test_legacy_plan_without_reservations_field_still_loads():
     }
     plan = Plan.from_dict(legacy)
     assert plan.reservations == []
+
+
+# Request simulation remains pure even when attempts fail after earlier successes.
+def test_request_order_names_and_immutability():
+    import json
+    from app.carve_request import normalize
+    from app.planning import simulate_carve_request
+    plan = Plan('request', supernets=[Allocation('192.0.2.0/24', 'east{n}')])
+    before = json.dumps(plan.to_dict(), sort_keys=True)
+    doc = normalize({'version': 1, 'items': [
+        dict(id='a', parents=['192.0.2.0/24'], prefix_length=26, repeat=2, name_template='{parent}-{n}'),
+        dict(id='b', parents=['192.0.2.0/24'], prefix_length=26, repeat=3, name_template='{n}')
+    ]}, 256)
+    result = simulate_carve_request(plan, doc, 256)
+    assert [p['name'] for r in result['results'] for p in r['proposals']] == ['east{n}-1', 'east{n}-2', '3', '4']
+    assert [r['status'] for r in result['results']] == ['will_succeed'] * 4 + ['will_not_fit']
+    assert json.dumps(plan.to_dict(), sort_keys=True) == before
+    assert result == simulate_carve_request(plan, doc, 256)
+
+
+def test_request_parent_policy_and_inventory():
+    from app.carve_request import normalize
+    from app.planning import request_parent_inventory, simulate_carve_request
+    plan = Plan('request', supernets=[Allocation('192.0.2.0/24', 'root')], allocations=[
+        Allocation('192.0.2.0/26', 'container'), Allocation('192.0.2.0/28', 'leaf'),
+        Allocation('192.0.2.128/27', 'reserved child'), Allocation('198.51.100.0/24', 'orphan'),
+        Allocation('198.51.100.0/28', 'orphan child')], reservations=[Allocation('192.0.2.128/26', 'held')])
+    parents, warnings = request_parent_inventory(plan)
+    assert {p['cidr'] for p in parents} == {'192.0.2.0/24', '192.0.2.0/26'}
+    root = parents[0]
+    assert root['direct_free_addresses'] == 128
+    assert root['largest_free_cidr'] == '192.0.2.64/26'
+    assert warnings
+    requested = ['192.0.2.0/28', '192.0.2.128/27', '192.0.2.128/26', '198.51.100.0/24', '203.0.113.0/24']
+    doc = normalize(dict(version=1, items=[dict(id='a', parents=requested, prefix_length=30, repeat=2)]), 256)
+    results = simulate_carve_request(plan, doc, 256)['results']
+    assert [r['status'] for r in results[::2]] == ['will_not_fit', 'parent_is_reservation', 'parent_is_reservation', 'will_not_fit', 'parent_not_found']
+    assert all(not r['proposals'] for r in results)
+
+
+def test_request_split_duplicate_and_repeated_split():
+    from app.carve_request import normalize
+    from app.planning import simulate_carve_request
+    plan = Plan('request', supernets=[Allocation('192.0.2.0/24', '')])
+    for count, statuses, proposed in [(1, ['conflicts_existing'] * 2, 0), (4, ['will_succeed', 'will_not_fit'], 4)]:
+        doc = normalize(dict(version=1, items=[dict(id='a', parents=['192.0.2.0/24'], count=count, repeat=2)]), 256)
+        result = simulate_carve_request(plan, doc, 256)
+        assert [r['status'] for r in result['results']] == statuses
+        assert result['summary']['proposed_allocations'] == proposed
+        assert not plan.allocations
+
+
+def test_request_nested_capacity_duplicates_and_all_modes():
+    from app.carve_request import normalize
+    from app.planning import request_parent_inventory, simulate_carve_request
+    plan = Plan('request', supernets=[Allocation('192.0.2.0/24', 'root')], allocations=[
+        Allocation('192.0.2.0/25', ''), Allocation('192.0.2.128/25', ''), Allocation('192.0.2.0/28', '')])
+    parents, _ = request_parent_inventory(plan)
+    assert [p['cidr'] for p in parents] == ['192.0.2.0/25']
+    doc = normalize(dict(version=1, items=[dict(id='a', parents=['192.0.2.0/24', '192.0.2.0/25'], host_count=30)]), 256)
+    result = simulate_carve_request(plan, doc, 256)
+    assert result['results'][0]['status'] == 'will_not_fit'
+    assert result['results'][1]['proposals'][0]['cidr'] == '192.0.2.32/27'
+    plan.allocations.append(Allocation('192.0.2.1/24', 'duplicate'))
+    assert simulate_carve_request(plan, doc, 256)['results'][0]['status'] == 'conflicts_existing'
+    for prefix in [0, 31, 32]:
+        plan = Plan('request', supernets=[Allocation('0.0.0.0/0', '')])
+        doc = normalize(dict(version=1, items=[dict(id='a', parents=['0.0.0.0/0'], prefix_length=prefix)]), 256)
+        result = simulate_carve_request(plan, doc, 256)['results'][0]
+        assert result['status'] == ('conflicts_existing' if prefix == 0 else 'will_succeed')
+
+
+def test_request_fragmentation_and_maximum_hosts_leave_plan_unchanged():
+    import json
+    from app.carve_request import normalize
+    from app.planning import simulate_carve_request
+    plan = Plan('request', supernets=[Allocation('192.0.2.0/24', '')], allocations=[
+        Allocation('192.0.2.0/26', ''), Allocation('192.0.2.128/26', '')])
+    before = json.dumps(plan.to_dict())
+    doc = normalize(dict(version=1, items=[dict(id='a', parents=['192.0.2.0/24'], prefix_length=25)]), 256)
+    assert simulate_carve_request(plan, doc, 256)['results'][0]['reason_code'] == 'capacity'
+    assert json.dumps(plan.to_dict()) == before
+    plan = Plan('request', supernets=[Allocation('0.0.0.0/0', '')])
+    doc = normalize(dict(version=1, items=[dict(id='a', parents=['0.0.0.0/0'], host_count=4294967294)]), 256)
+    assert simulate_carve_request(plan, doc, 256)['results'][0]['status'] == 'conflicts_existing'
+
+
+def test_request_reservation_priority_and_selected_parents_interact():
+    import json
+    from app.carve_request import normalize
+    from app.planning import simulate_carve_request
+    plan = Plan('request', supernets=[Allocation('192.0.2.0/24', '')],
+                allocations=[Allocation('192.0.2.0/25', ''), Allocation('192.0.2.0/28', '')],
+                reservations=[Allocation('192.0.2.128/25', '')])
+    before = json.dumps(plan.to_dict())
+    doc = normalize(dict(version=1, items=[dict(id='a', parents=['192.0.2.0/24', '192.0.2.0/25'], prefix_length=26)]), 256)
+    results = simulate_carve_request(plan, doc, 256)['results']
+    assert results[0]['status'] == 'will_not_fit'
+    assert results[1]['proposals'][0]['cidr'] == '192.0.2.64/26'
+    assert json.dumps(plan.to_dict()) == before
+    plan.reservations.append(Allocation('192.0.2.0/24', ''))
+    assert simulate_carve_request(plan, doc, 256)['results'][0]['status'] == 'parent_is_reservation'
