@@ -268,6 +268,10 @@
       </div>
     </div>
 
+    <!-- Slide-overs live in a clipping layer, not directly in the rail: parked
+         at translateX(100%) they would otherwise double the rail's scrollWidth
+         and let it scroll sideways. See .rail-overlays in app.css. -->
+    <div class="rail-overlays">
     <!-- DETAIL slide-over -->
     <div class="detail" id="detail" aria-hidden="true">
       <div class="detail-head">
@@ -327,6 +331,7 @@
         <div id="calcResult"></div>
       </div>
     </div>
+    </div><!-- /.rail-overlays -->
   </aside>
 </div>
 

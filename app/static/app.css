@@ -146,6 +146,23 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .stage    { background: var(--bg);   overflow: hidden; display: flex; flex-direction: column; }
 .rail     { background: var(--bg-1); border-left: 1px solid var(--line); overflow-y: auto; position: relative; }
 
+/* The slide-overs are parked off-canvas at translateX(100%). Left as direct
+   children of the rail they doubled its scrollWidth (718 vs 359), and since
+   `overflow-y: auto` makes the computed overflow-x `auto` too, the rail became
+   horizontally scrollable. Focusing anything inside it then scrolled it a full
+   panel width, dragging every rail control out from under the rail and beneath
+   the stage, where the viz swallowed the clicks. Clipping them in their own
+   layer keeps that overflow out of the rail's scroll area.
+
+   `clip`, on both axes, is load-bearing. `overflow: hidden` here only moves the
+   bug one level in: hidden still makes a scroll container, so scrollIntoView on
+   anything inside could scroll the layer itself and drag a closed panel over
+   the rail. `clip` is not a scroll container, so its scrollLeft can never move.
+   It has to be both axes — `overflow-x: clip` beside a non-clip `overflow-y`
+   computes back to `hidden`, which is why the rail itself can't use it. */
+.rail-overlays { position: absolute; inset: 0; overflow: clip; pointer-events: none; z-index: 4; }
+.rail-overlays > * { pointer-events: auto; }
+
 /* ---- Section heads ---- */
 .head {
   display: flex; align-items: center; justify-content: space-between;
