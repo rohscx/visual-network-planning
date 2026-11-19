@@ -1672,6 +1672,7 @@ function invalidateRequest(message) {
   REQUEST.document = null;
   REQUEST.selected.clear();
   requestEl('requestCommitBtn').disabled = true;
+  requestEl('requestCopyBtn').disabled = true;
   requestEl('requestResults').replaceChildren();
   if (message) requestEl('requestStatus').textContent = message;
 }
@@ -1681,6 +1682,7 @@ function syncRequestSelection() {
   STATE.proposals = preview.results.flatMap(r => r.proposals)
     .filter(p => REQUEST.selected.has(p.id)).map(p => ({...p, serverResolved: true}));
   requestEl('requestCommitBtn').disabled = REQUEST.busy || !REQUEST.selected.size;
+  requestEl('requestCopyBtn').disabled = REQUEST.busy || !REQUEST.selected.size;
   requestEl('requestCommitBtn').textContent = `commit ${REQUEST.selected.size} selected`;
   requestEl('requestStatus').textContent = `${REQUEST.selected.size} selected${plural(REQUEST.selected.size, ' allocation')}` + `${preview.summary.failed_attempts ? `; ${preview.summary.failed_attempts} attempt${plural(preview.summary.failed_attempts)} cannot be placed` : ''}` + '. Only checked rows are committed.';
   renderProposals(); renderViz();
@@ -1741,6 +1743,7 @@ function requestBusy(busy) {
   REQUEST.busy = busy;
   for (const id of ['requestPreviewBtn', 'requestDiscardBtn', 'requestFile', 'requestText']) requestEl(id).disabled = busy;
   requestEl('requestCommitBtn').disabled = busy || !REQUEST.preview || !REQUEST.selected.size;
+  requestEl('requestCopyBtn').disabled = busy || !REQUEST.preview || !REQUEST.selected.size;
   requestEl('requestResults').querySelectorAll('input').forEach(el => el.disabled = busy);
 }
 async function previewRequest() {
@@ -1805,6 +1808,22 @@ requestEl('requestText').addEventListener('input', () => {
 });
 requestEl('requestPreviewBtn').addEventListener('click', previewRequest);
 requestEl('requestCommitBtn').addEventListener('click', commitRequest);
+// Same TSV shape as the carve tab's "copy all", plus the tags a request can
+// set. Scoped to the selection, so it copies exactly what commit would write.
+requestEl('requestCopyBtn').addEventListener('click', () => {
+  if (!REQUEST.preview) return;
+  const rows = REQUEST.preview.results.flatMap(r => r.proposals)
+    .filter(p => REQUEST.selected.has(p.id));
+  if (!rows.length) return;
+  const lines = ['cidr\tname\tparent_cidr\tparent_name\tsize\tprefix\ttags'];
+  for (const p of rows) {
+    const info = cidrInfo(p.cidr);
+    const parentItem = TREE.items.find(it => it.cidr === p.parent);
+    lines.push([p.cidr, p.name || '', p.parent, (parentItem && parentItem.name) || '',
+      info.size, `/${info.prefix}`, (p.tags || []).join(',')].join('\t'));
+  }
+  copyText(lines.join('\n'), `copied ${rows.length} row${plural(rows.length)}`);
+});
 requestEl('requestDiscardBtn').addEventListener('click', () => {
   invalidateRequest('Preview discarded; nothing saved.'); renderViz(); renderProposals();
 });

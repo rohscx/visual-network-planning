@@ -933,6 +933,12 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .commit-row {
   display: flex; gap: 8px; margin-top: 10px;
 }
+/* .btn has a fixed 32px height, so a label allowed to wrap clips its second
+   line rather than growing the button. The rail is a fixed 360px and the
+   commit label grows with the selection count ("commit 256 selected"), which
+   left flex shrinking these below their text width. */
+.commit-row .btn { white-space: nowrap; }
+.commit-row .btn.icon-only { padding: 0 10px; flex: none; }
 .btn {
   height: 32px; padding: 0 14px;
   border: 1px solid var(--line);
