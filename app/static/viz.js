@@ -1689,28 +1689,35 @@ function syncRequestSelection() {
 }
 const plural = (n, word = '') => `${word}${n === 1 ? '' : 's'}`;
 
+// Render the filter the way the carve tab's chips read — "prod AND
+// (us-east1 OR us-west2)" — so a filter that matched more or fewer parents
+// than expected is legible before commit, not raw JSON. One wording, shared by
+// the on-screen line and the copied record, so the two cannot drift. The
+// display truncates long parent lists; a copy keeps every one of them.
+const filterText = (groups) => groups
+  .map(g => g.length > 1 ? `(${g.join(' OR ')})` : g[0])
+  .join(' AND ');
+function resolutionLine(resolution, limit = 0) {
+  const selector = resolution.parent_filter
+    ? `filter ${filterText(resolution.parent_filter.groups)}` : 'explicit parents';
+  const all = resolution.resolved_parents;
+  const shown = limit ? all.slice(0, limit) : all;
+  const rest = all.length - shown.length;
+  const list = shown.join(', ') + (rest > 0 ? ` +${rest} more` : '');
+  return `${resolution.item_id} · ${selector} · `
+    + `${resolution.matched_parents} ${plural(resolution.matched_parents, 'parent')} matched`
+    + (list ? `: ${list}` : '');
+}
+
 function renderRequestResults() {
   const wrap = requestEl('requestResults');
   wrap.replaceChildren();
   const labels = {capacity: 'Does not fit', conflict: 'Resolve conflict',
     missing_parent: 'Choose an existing parent', reserved_parent: 'Choose an unreserved parent',
     empty_filter_match: 'No matching parents'};
-  // Render the filter the way the carve tab's chips read — "prod AND
-  // (us-east1 OR us-west2)" — so a filter that matched more or fewer
-  // parents than expected is legible before commit, not raw JSON.
-  const filterText = (groups) => groups
-    .map(g => g.length > 1 ? `(${g.join(' OR ')})` : g[0])
-    .join(' AND ');
   for (const resolution of REQUEST.preview.resolutions || []) {
     const row = document.createElement('p');
-    const selector = resolution.parent_filter
-      ? `filter ${filterText(resolution.parent_filter.groups)}` : 'explicit parents';
-    const shown = resolution.resolved_parents.slice(0, 12);
-    const rest = resolution.resolved_parents.length - shown.length;
-    const list = shown.join(', ') + (rest > 0 ? ` +${rest} more` : '');
-    row.textContent = `${resolution.item_id} · ${selector} · `
-      + `${resolution.matched_parents} ${plural(resolution.matched_parents, 'parent')} matched`
-      + (list ? `: ${list}` : '');
+    row.textContent = resolutionLine(resolution, 12);
     wrap.appendChild(row);
   }
   for (const result of REQUEST.preview.results) {
@@ -1815,7 +1822,15 @@ requestEl('requestCopyBtn').addEventListener('click', () => {
   const rows = REQUEST.preview.results.flatMap(r => r.proposals)
     .filter(p => REQUEST.selected.has(p.id));
   if (!rows.length) return;
-  const lines = ['cidr\tname\tparent_cidr\tparent_name\tsize\tprefix\ttags'];
+  // How each item selected its parents, above the table: without it the rows
+  // say what was carved but not what was asked for. Commented so the table
+  // below still imports as TSV.
+  const lines = [];
+  for (const resolution of REQUEST.preview.resolutions || []) {
+    lines.push('# ' + resolutionLine(resolution));
+  }
+  if (lines.length) lines.push('');
+  lines.push('cidr\tname\tparent_cidr\tparent_name\tsize\tprefix\ttags');
   for (const p of rows) {
     const info = cidrInfo(p.cidr);
     const parentItem = TREE.items.find(it => it.cidr === p.parent);
